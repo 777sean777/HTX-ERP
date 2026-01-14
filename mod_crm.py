@@ -104,4 +104,20 @@ def show(supabase, dept):
                 st.dataframe(
                     df[["type", "name", "tax_id", "contact_person", "credit_limit", "trade_items"]],
                     use_container_width=True,
-                    hide_index=
+                    hide_index=True
+                )
+                
+                # 刪除管理
+                st.divider()
+                st.subheader("🗑️ 資料移除")
+                col_sel, col_btn = st.columns([3, 1])
+                target = col_sel.selectbox("選擇要刪除的夥伴", [""] + df["name"].tolist())
+                if target:
+                    if col_btn.button(f"永久刪除 {target}", type="secondary"):
+                        supabase.table("partners").delete().eq("name", target).execute()
+                        st.warning(f"已刪除 {target}")
+                        st.rerun()
+            else:
+                st.info("資料庫目前無夥伴資料。")
+        except Exception as e:
+            st.error(f"資料讀取失敗：{e}")
