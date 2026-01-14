@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# --- 憲法神聖科目定義 (V2026.01.14-FINAL-COMPLETE) ---
+# --- 憲法神聖科目定義 ---
 HOLY_SUBJECTS = {
     "一、訂單": ["1.0 訂單總額 (PO Amount)"],
     "二、總收入": [
@@ -51,9 +51,7 @@ def show(supabase):
     p_code = target_proj["project_code"]
     month_cols = get_month_list(target_proj["start_date"])
     
-    if not month_cols:
-        st.error("日期計算錯誤")
-        return 
+    if not month_cols: return 
 
     st.caption(f"Code: {p_code} | Range: {month_cols[0]} ~ {month_cols[-1]}")
 
@@ -64,20 +62,19 @@ def show(supabase):
     except:
         df_db = pd.DataFrame()
 
-    # 防呆：確保 DataFrame 有欄位 (之前語法錯誤的地方已修正)
     if df_db.empty:
         df_db = pd.DataFrame(columns=["project_code", "year_month", "cost_item", "plan_amount"])
 
-    # --- 3. 準備渲染函數 ---
+    # --- 3. 準備渲染函數 (新版邏輯) ---
     def render_section(title, items, key_prefix):
         editor_data = []
         for item in items:
             row_plan = {"科目": f"{item}"}
+            # 填入月份數據
             for m in month_cols:
                 val = 0.0
                 if not df_db.empty:
                     try:
-                        # 嚴謹的篩選邏輯
                         match = df_db[(df_db["cost_item"] == item) & (df_db["year_month"] == m)]
                         if not match.empty:
                             val = float(match.iloc[0]["plan_amount"])
@@ -85,90 +82,114 @@ def show(supabase):
                 row_plan[m] = val
             editor_data.append(row_plan)
         
+        # 建立 DataFrame
         df_editor = pd.DataFrame(editor_data).set_index("科目")
+        
+        # [新增邏輯] 計算橫向總計 (Row Sum)
+        # axis=1 代表橫向相加
+        df_editor.insert(0, "∑ 總計 (Total)", df_editor.sum(axis=1))
         
         st.markdown(f"#### {title}")
         
-        # ★★★ 智慧偵測：如果版本太舊不支援 frozen_columns，就自動拿掉 ★★★
+        # 顯示編輯器
+        # 注意：我們將 "∑ 總計 (Total)" 設為 disabled，防止用戶手動改總數
         try:
             edited_df = st.data_editor(
                 df_editor,
                 use_container_width=True,
                 height=250,
                 key=f"ed_{key_prefix}",
-                frozen_columns=1 
+                disabled=["∑ 總計 (Total)"], # 鎖定總計欄
+                frozen_columns=2 # 凍結 科目 + 總計，方便查看
             )
         except TypeError:
-            # 降級處理
-            if st.session_state.get("dev_mode"):
-                st.warning("⚠️ 檢測到 Streamlit 版本較舊，已關閉凍結欄位功能。")
+            # 舊版兼容
             edited_df = st.data_editor(
                 df_editor,
                 use_container_width=True,
                 height=250,
-                key=f"ed_{key_prefix}"
+                key=f"ed_{key_prefix}",
+                disabled=["∑ 總計 (Total)"]
             )
         
-        # 自動加總
-        total_series = edited_df.sum(axis=0)
-        df_total = pd.DataFrame(total_series).T
-        df_total.index = ["∑ 總計 (Total)"]
+        # [修改邏輯] 不再顯示每個月的垂直加總，只顯示該大項的「總金額」
+        # 計算該大項的總和 (Grand Total of this Category)
+        category_total = edited_df["∑ 總計 (Total)"].sum()
         
-        st.dataframe(df_total.style.format("{:,.0f}").background_gradient(cmap="Oranges", axis=1), use_container_width=True)
+        # 用 Metric 大字顯示，清楚明瞭
+        st.metric(label=f"{title} - 全案總計", value=f"${category_total:,.0f}")
         
-        return edited_df, total_series
+        return edited_df, category_total
 
     # --- 4. 介面 Tabs ---
-    tab_order, tab_rev, tab_cost, tab_profit = st.tabs(["📝 訂單", "💰 收入", "📉 費用", "📊 毛利 (Profit)"])
+    tab_order, tab_rev, tab_cost, tab_profit = st.tabs(["📝 訂單", "💰 收入", "📉 費用", "📊 全案損益總結"])
 
+    # === Tab 1: 訂單 ===
     with tab_order:
         st.info("輸入預計接單金額")
-        df_order, sum_order = render_section("一、訂單總額", HOLY_SUBJECTS["一、訂單"], "order")
+        df_order, total_order_val = render_section("一、訂單總額", HOLY_SUBJECTS["一、訂單"], "order")
 
+    # === Tab 2: 收入 ===
     with tab_rev:
         st.info("輸入收入預算")
-        df_rev, sum_rev = render_section("二、總收入", HOLY_SUBJECTS["二、總收入"], "rev")
+        df_rev, total_rev_val = render_section("二、總收入", HOLY_SUBJECTS["二、總收入"], "rev")
 
+    # === Tab 3: 費用 ===
     with tab_cost:
         st.info("輸入變動費用預算")
-        df_cost, sum_cost = render_section("三、變動費用", HOLY_SUBJECTS["三、變動費用"], "cost")
+        df_cost, total_cost_val = render_section("三、變動費用", HOLY_SUBJECTS["三、變動費用"], "cost")
 
+    # === Tab 4: 全案損益總結 (新版) ===
     with tab_profit:
-        st.subheader("📊 專案邊際毛利試算")
-        st.caption("依據輸入數據即時計算 (無須存檔即可預覽)")
+        st.subheader("📊 專案全案損益預估 (Project Summary)")
+        st.caption("彙整上方輸入之所有數據，計算全案最終效益。")
         
-        # 毛利計算 (Series 運算)
-        # 確保 sum_rev 和 sum_cost 都有數據
-        gross_profit = sum_rev - sum_cost
-        
-        # 毛利率計算
-        margin_rate = []
-        for m in month_cols:
-            r = sum_rev.get(m, 0) if not sum_rev.empty else 0
-            c = sum_cost.get(m, 0) if not sum_cost.empty else 0
-            p = r - c
-            rate = (p / r * 100) if r != 0 else 0.0
-            margin_rate.append(rate)
-            
-        profit_data = {
-            "1. 總收入": sum_rev,
-            "2. 變動費用": sum_cost,
-            "3. 邊際毛利": gross_profit,
-            "4. 毛利率 (%)": margin_rate
+        # 計算核心指標
+        gross_profit = total_rev_val - total_cost_val
+        margin_rate = (gross_profit / total_rev_val * 100) if total_rev_val != 0 else 0.0
+
+        # 建立總結表格 (Simple Table)
+        summary_data = {
+            "項目": [
+                "1. 全案預估總訂單 (Total Order)",
+                "2. 全案預估總收入 (Total Revenue)",
+                "3. 全案預估總變動費用 (Total Variable Cost)",
+                "4. 全案預估邊際毛利 (Gross Profit)",
+                "5. 全案預估邊際毛利率 (Gross Margin %)"
+            ],
+            "金額 / 數值": [
+                total_order_val,
+                total_rev_val,
+                total_cost_val,
+                gross_profit,
+                margin_rate # 這裡先存數值，顯示時再格式化
+            ]
         }
         
-        df_profit = pd.DataFrame(profit_data).T 
+        df_sum = pd.DataFrame(summary_data)
         
-        # 顯示
-        st.markdown("#### 💵 金額預測")
-        df_amount = df_profit.iloc[0:3] 
-        st.dataframe(df_amount.style.format("{:,.0f}").background_gradient(cmap="Greens", subset=pd.IndexSlice["3. 邊際毛利", :], axis=1), use_container_width=True)
+        # 視覺化顯示
+        # 針對每一列做不同的格式處理比較麻煩，我們直接用 st.metric 排版比較漂亮
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("預估總收入", f"${total_rev_val:,.0f}")
+        c2.metric("預估總費用", f"${total_cost_val:,.0f}", delta_color="inverse") # 費用通常不顯示 delta
+        c3.metric("預估總毛利", f"${gross_profit:,.0f}", 
+                  delta=f"{margin_rate:.1f}%", delta_color="normal")
 
-        st.markdown("#### 📉 毛利率趨勢 (%)")
-        df_rate = df_profit.iloc[3:4] 
-        st.dataframe(df_rate.style.format("{:.1f}%").background_gradient(cmap="YlOrRd", axis=1), use_container_width=True)
+        st.divider()
+        st.markdown("#### 📑 詳細損益表")
+        
+        # 手動格式化表格顯示
+        display_df = df_sum.copy()
+        display_df["金額 / 數值"] = display_df.apply(
+            lambda x: f"{x['金額 / 數值']:.1f}%" if "率" in x["項目"] else f"${x['金額 / 數值']:,.0f}", 
+            axis=1
+        )
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    # --- 5. 存檔邏輯 ---
+
+    # --- 5. 存檔邏輯 (自動過濾總計欄) ---
     st.divider()
     if st.button("💾 儲存所有預算規劃", type="primary"):
         upsert_list = []
@@ -177,15 +198,16 @@ def show(supabase):
             for idx, row in df_input.iterrows():
                 clean_item = idx 
                 for m_col in month_cols:
-                    amount = row[m_col]
-                    # 存入所有非 None 數值 (包含 0)
-                    if pd.notna(amount): 
-                         upsert_list.append({
-                            "project_code": p_code,
-                            "year_month": m_col,
-                            "cost_item": clean_item,
-                            "plan_amount": float(amount)
-                        })
+                    # ★★★ 關鍵：只存月份欄位，跳過 "∑ 總計 (Total)" ★★★
+                    if m_col in row: 
+                        amount = row[m_col]
+                        if pd.notna(amount): 
+                             upsert_list.append({
+                                "project_code": p_code,
+                                "year_month": m_col,
+                                "cost_item": clean_item,
+                                "plan_amount": float(amount)
+                            })
         
         process_save(df_order)
         process_save(df_rev)
@@ -193,7 +215,6 @@ def show(supabase):
 
         if upsert_list:
             try:
-                # 分批寫入 (避免 Payload 太大)
                 chunk_size = 100
                 progress_text = "存檔中，請稍候..."
                 my_bar = st.progress(0, text=progress_text)
