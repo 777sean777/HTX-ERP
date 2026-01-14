@@ -2,72 +2,78 @@ import streamlit as st
 import pandas as pd
 
 def show(supabase, dept):
-    st.markdown('<p class="main-header">👥 合作夥伴管理 (CRM/SRM) - 原子化欄位版</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">👥 合作夥伴管理 (CRM/SRM) - 精簡看板版</p>', unsafe_allow_html=True)
 
-    with st.sidebar:
-        if st.button("🚀 載入全原子化測試數據"):
-            st.session_state.edit_crm = {
-                "name": "宏達工業股份有限公司", "tax_id": "12345678",
-                "c_mail": "info@honda.com", "f_mail": "accounting@honda.com",
-                "c_phone": "02-22334455", "addr": "台北市大安區...",
-                "c_name": "王大明", "c_mobile": "0912-345678", "p_mail": "wang@honda.com",
-                "limit": 500000.0, "items": "真空設備"
-            }
-            st.rerun()
-
-    res = supabase.table("partners").select("*").order("name").execute()
-    df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
-
-    tab1, tab2 = st.tabs(["✍️ 編輯與新增", "📊 夥伴資料清單"])
-
-    with tab1:
-        target = st.selectbox("🎯 選擇夥伴進行修改", [""] + (df["name"].tolist() if not df.empty else []))
+    # --- 1. 建立/編輯區 ---
+    with st.expander("➕ 新增 / ✍️ 編輯 夥伴資料", expanded=False):
+        res = supabase.table("partners").select("*").order("name").execute()
+        df_all = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        
+        target = st.selectbox("🎯 選擇對象進行修改 (留空為新增)", [""] + (df_all["name"].tolist() if not df_all.empty else []))
+        v = {}
         if target:
-            row = df[df['name'] == target].iloc[0]
-            st.session_state.edit_crm = {
-                "name": row['name'], "tax_id": row['tax_id'], 
-                "c_mail": row.get('company_email'), "f_mail": row.get('finance_email'),
-                "c_phone": row.get('company_phone'), "addr": row.get('company_address'),
-                "c_name": row.get('contact_person'), "c_mobile": row.get('contact_mobile'),
-                "p_mail": row.get('contact_email'), "limit": float(row.get('credit_limit', 0)),
-                "items": row.get('trade_items')
-            }
+            row = df_all[df_all['name'] == target].iloc[0]
+            v = row # 這裡取得資料庫現有值
 
-        v = st.session_state.get("edit_crm", {})
-        with st.form("crm_atomic_form"):
-            st.subheader("🏢 企業通訊資訊")
-            c1, c2, c3 = st.columns([2, 1, 1])
-            name = c1.text_input("公司全名", value=v.get("name", ""), disabled=True if target else False)
+        with st.form("crm_form_v2"):
+            p_type = st.radio("類別", ["Customer", "Supplier"], horizontal=True, index=0 if v.get('type')=='Customer' else 1)
+            c1, c2, c3 = st.columns([2,1,1])
+            name = c1.text_input("公司名稱", value=v.get("name", ""), disabled=True if target else False)
             tax_id = c2.text_input("統一編號", value=v.get("tax_id", ""))
-            limit = c3.number_input("建議交易上限", value=v.get("limit", 0.0))
-            
-            c4, c5, c6 = st.columns(3)
-            comp_email = c4.text_input("公司電郵 (通用)", value=v.get("c_mail", ""))
-            fin_email = c5.text_input("財務電郵 (對帳用)", value=v.get("f_mail", ""))
-            comp_phone = c6.text_input("公司電話", value=v.get("c_phone", ""))
-            
-            address = st.text_input("公司地址", value=v.get("addr", ""))
-            
-            st.divider()
-            st.subheader("👤 窗口資訊")
-            l1, l2, l3 = st.columns(3)
-            c_name = l1.text_input("窗口姓名", value=v.get("c_name", ""))
-            c_mobile = l2.text_input("窗口手機", value=v.get("c_mobile", ""))
-            c_email = l3.text_input("窗口個人電郵", value=v.get("p_mail", ""))
+            limit = c3.number_input("交易上限", value=float(v.get("credit_limit", 0)))
 
-            if st.form_submit_button("💾 儲存並檢查原子化欄位"):
+            st.markdown("---")
+            col_fin, col_sales = st.columns(2)
+            with col_fin:
+                st.subheader("💰 財務聯絡人")
+                f_name = st.text_input("財務姓名", value=v.get("finance_person", ""))
+                f_mail = st.text_input("財務電郵", value=v.get("finance_email", ""))
+            with col_sales:
+                st.subheader("🤝 業務聯絡人")
+                s_name = st.text_input("業務姓名", value=v.get("contact_person", ""))
+                s_mail = st.text_input("業務電郵", value=v.get("contact_email", ""))
+                s_phone = st.text_input("業務手機", value=v.get("contact_mobile", ""))
+            
+            remark = st.text_area("備註", value=v.get("remarks", ""))
+            
+            if st.form_submit_button("💾 儲存資料"):
                 save_data = {
-                    "name": name, "tax_id": tax_id, "company_email": comp_email,
-                    "finance_email": fin_email, "company_phone": comp_phone,
-                    "company_address": address, "contact_person": c_name,
-                    "contact_mobile": c_mobile, "contact_email": c_email,
-                    "credit_limit": limit, "trade_items": v.get("items", "")
+                    "name": name, "type": p_type, "tax_id": tax_id, "credit_limit": limit,
+                    "finance_person": f_name, "finance_email": f_mail,
+                    "contact_person": s_name, "contact_email": s_mail, "contact_mobile": s_phone,
+                    "remarks": remark
                 }
                 supabase.table("partners").upsert(save_data, on_conflict="name").execute()
-                st.success(f"✅ {name} 資料已拆解存檔。")
-                st.session_state.edit_crm = {}
+                st.success("✅ 資料同步成功")
                 st.rerun()
 
-    with tab2:
-        if not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+    # --- 2. 檢索與精簡看板 ---
+    st.divider()
+    search = st.text_input("🔍 快速檢索 (輸入公司名、分類、或窗口)...")
+    
+    if not df_all.empty:
+        # 篩選邏輯
+        filtered_df = df_all[df_all.apply(lambda r: search.lower() in str(r).lower(), axis=1)]
+        
+        for idx, row in filtered_df.iterrows():
+            with st.container(border=True):
+                # 精簡標題列
+                label = "🟦 客戶" if row['type'] == 'Customer' else "🟧 供應商"
+                col_head, col_limit = st.columns([3, 1])
+                with col_head:
+                    st.markdown(f"#### {label} | {row['name']}")
+                with col_limit:
+                    st.markdown(f"**交易上限:** `${row['credit_limit']:,.0f}`")
+                
+                # 點擊展開詳細資訊
+                with st.expander("📄 檢視完整細節"):
+                    d1, d2 = st.columns(2)
+                    d1.write(f"**統編:** {row['tax_id']}")
+                    d1.write(f"**財務窗口:** {row.get('finance_person')} ({row.get('finance_email')})")
+                    d2.write(f"**業務窗口:** {row.get('contact_person')} ({row.get('contact_mobile')})")
+                    st.write(f"**備註:** {row.get('remarks')}")
+                    if st.button("🗑️ 刪除夥伴資料", key=f"del_{idx}"):
+                        supabase.table("partners").delete().eq("name", row['name']).execute()
+                        st.rerun()
+    else:
+        st.info("資料庫目前為空。")
