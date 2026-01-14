@@ -114,4 +114,29 @@ def show(supabase, dept):
     st.divider()
     if not df_all.empty:
         st.subheader("📋 夥伴名單")
-        search = st.
+        search = st.text_input("🔍 搜尋夥伴...", placeholder="輸入名稱或國籍")
+        if search:
+            df_all = df_all[df_all.apply(lambda r: search.lower() in str(r).lower(), axis=1)]
+
+        for _, row in df_all.iterrows():
+            with st.container(border=True):
+                c_head, c_info = st.columns([3, 1])
+                badge = "🟦 客戶" if row['type'] == 'Customer' else "🟧 供應商"
+                nation_str = f"({row.get('nationality', '未知')})"
+                c_head.markdown(f"**{badge} | {row['name']}** <small>{nation_str}</small>", unsafe_allow_html=True)
+                
+                limit_show = float(row.get('credit_limit')) if row.get('credit_limit') else 0
+                c_info.markdown(f"額度: `${limit_show:,.0f}`")
+                
+                # [新增] 刪除功能區
+                with st.expander("⚙️ 管理此夥伴"):
+                    st.write(f"統一編號: {row.get('tax_id', '無')}")
+                    # 使用 row['id'] 作為 key 確保唯一性
+                    if st.button(f"🗑️ 永久刪除 {row['name']}", key=f"del_{row['id']}"):
+                        try:
+                            supabase.table("partners").delete().eq("id", row['id']).execute()
+                            st.warning(f"已刪除 {row['name']}")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"刪除失敗 (可能已被專案引用): {e}")
