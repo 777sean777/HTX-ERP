@@ -5,10 +5,10 @@ from datetime import datetime
 # --- 憲法神聖科目定義 ---
 HOLY_SUBJECTS = {
     "一、訂單": ["1.0 訂單總額 (PO Amount)"],
-    "二、總收入": [
+    "二、總收入 (Revenue)": [
         "2.1 產品銷售收入", "2.1 服務收入", "2.1 補助金收入", "2.2 其他收入"
     ],
-    "三、變動費用": [
+    "三、變動費用 (Variable Costs)": [
         "3.1 原料採購成本", "3.1 輔料採購成本", "3.1 機械結構件採購", "3.1 電控零件採購", "3.1 耗材成本",
         "3.2 直接人工成本",
         "3.3 委外加工費用", "3.3 打樣及設計費", "3.3 運輸與倉儲",
@@ -53,7 +53,7 @@ def show(supabase):
     
     # --- 2. 產生時間軸 ---
     month_cols = get_month_list(target_proj["start_date"])
-    if not month_cols: return # 防呆
+    if not month_cols: return 
 
     st.caption(f"專案代碼: {p_code} | 預算區間: {month_cols[0]} ~ {month_cols[-1]}")
 
@@ -62,12 +62,10 @@ def show(supabase):
         data_res = supabase.table("project_matrix").select("*").eq("project_code", p_code).execute()
         df_db = pd.DataFrame(data_res.data)
     except Exception as e:
-        # 如果表不存在或讀取失敗，建立空表結構，避免 KeyError
         df_db = pd.DataFrame(columns=["project_code", "year_month", "cost_item", "plan_amount"])
         if st.session_state.get("dev_mode"):
             st.warning(f"資料庫讀取異常 (可能是初次建立): {e}")
 
-    # ★★★ 防彈衣：確保 DataFrame 有欄位，即使它是空的 ★★★
     if df_db.empty:
         df_db = pd.DataFrame(columns=["project_code", "year_month", "cost_item", "plan_amount"])
 
@@ -81,9 +79,7 @@ def show(supabase):
             row_plan = {"科目": f"{item} (Plan)"}
             for m in month_cols:
                 val = 0.0
-                # 只有當資料庫有資料時才去篩選
                 if not df_db.empty:
-                    # 注意：這裡需確保 cost_item 欄位存在
                     try:
                         match = df_db[
                             (df_db["cost_item"] == item) & 
@@ -92,7 +88,7 @@ def show(supabase):
                         if not match.empty:
                             val = float(match.iloc[0]["plan_amount"])
                     except:
-                        pass # 欄位對不上就跳過，保持 0.0
+                        pass
                 
                 row_plan[m] = val
             editor_data.append(row_plan)
@@ -100,23 +96,22 @@ def show(supabase):
         df_editor = pd.DataFrame(editor_data).set_index("科目")
         
         st.markdown(f"#### {category_name}")
-        # 使用 key 避免元件重繪衝突
+        # ★★★ 修正點：移除了 frozen_columns=1 ★★★
         edited = st.data_editor(
             df_editor,
             use_container_width=True,
             height=300,
-            frozen_columns=1,
             key=f"editor_{category_name}" 
         )
         return edited
 
     with tab_rev:
         st.info("💡 提示：輸入預算 (Plan)。")
-        df_rev_new = render_matrix_editor("二、總收入", HOLY_SUBJECTS["二、總收入"])
+        df_rev_new = render_matrix_editor("二、總收入 (Revenue)", HOLY_SUBJECTS["二、總收入 (Revenue)"])
 
     with tab_cost:
         st.info("💡 提示：輸入變動費用預算。")
-        df_cost_new = render_matrix_editor("三、變動費用", HOLY_SUBJECTS["三、變動費用"])
+        df_cost_new = render_matrix_editor("三、變動費用 (Variable Costs)", HOLY_SUBJECTS["三、變動費用 (Variable Costs)"])
 
     # --- 5. 存檔邏輯 ---
     if st.button("💾 儲存預算規劃"):
@@ -127,7 +122,7 @@ def show(supabase):
                 clean_item = idx.replace(" (Plan)", "")
                 for m_col in month_cols:
                     amount = row[m_col]
-                    if amount is not None: # 存 0 也是一種數據
+                    if amount is not None: 
                          upsert_list.append({
                             "project_code": p_code,
                             "year_month": m_col,
