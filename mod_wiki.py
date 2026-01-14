@@ -1,34 +1,54 @@
 import streamlit as st
 
 def show():
-    st.markdown('<p class="main-header">🛡️ HTX ERP 系統視覺化地圖</p>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("📍 系統架構圖")
-        st.graphviz_chart('''
-            digraph {
-                node [shape=box, style=filled, color=lightblue, fontname="Source Sans Pro"]
-                "app.py" -> "core_engine.py" [label="核心"]
-                "app.py" -> "mod_wiki.py" [label="說明"]
-                "app.py" -> "mod_cashflow.py" [label="財務"]
-                "mod_cashflow.py" -> "transactions" [label="存入"]
-                "transactions" -> "看板" [label="計算"]
-            }
-        ''')
+    st.markdown('<p class="main-header">🛡️ HTX ERP 開發者地圖 (Code Wiki)</p>', unsafe_allow_html=True)
+    st.write("點擊下方模組方塊，檢查業務邏輯與程式碼：")
 
-    with col2:
-        st.subheader("📚 檔案與邏輯說明")
-        with st.expander("📂 app.py (入口)", expanded=True):
-            st.write("▼ **功能:** 側邊欄導航、版本控管、部門切換。")
-            
-        with st.expander("📂 mod_cashflow.py (財務規劃)"):
-            st.write("▼ **功能:** 現金估算表輸入、Plan/Real 比對、自動測試按鈕。")
+    # --- 第一排模組 ---
+    c1, c2, c3 = st.columns(3)
 
-        with st.expander("📂 core_engine.py (引擎)"):
-            st.write("▼ **功能:** 資料庫連線、CSS 全域樣式注入。")
+    with c1:
+        with st.container(border=True):
+            st.subheader("👥 夥伴管理")
+            st.write("● **狀態:** 已上線 (V2.0)")
+            if st.button("查看詳情", key="wiki_crm"):
+                st.session_state.wiki_view = "CRM"
 
+    with c2:
+        with st.container(border=True):
+            st.subheader("🚀 專案建檔")
+            st.write("● **狀態:** 規劃中")
+            if st.button("查看詳情", key="wiki_proj"):
+                st.session_state.wiki_view = "PROJ"
+
+    with c3:
+        with st.container(border=True):
+            st.subheader("📅 預算規劃")
+            st.write("● **狀態:** 規劃中")
+            if st.button("查看詳情", key="wiki_plan"):
+                st.session_state.wiki_view = "PLAN"
+
+    # --- 詳細內容展示區 ---
+    view = st.session_state.get("wiki_view", "NONE")
     st.divider()
-    st.subheader("📌 HTX 開發憲法")
-    st.success("1. 穩定優先：不使用不穩定的圖示字體。\n2. 數據至上：所有輸入必須經過 transactions 表歸納。")
+
+    if view == "CRM":
+        st.success("### 📂 模組：合作夥伴管理 (CRM/SRM)")
+        tab_logic, tab_code = st.tabs(["💡 業務邏輯框架", "💻 原始程式碼"])
+        with tab_logic:
+            st.write("""
+            **1. 功能核心:** 建立公司所有往來客戶與供應商的身份證。
+            **2. 風險控管:** 包含『建議交易金額上限』，用於後續採購/訂單警示。
+            **3. 資料結構:** 包含統編、聯絡人、多組聯繫電話及地址。
+            **4. 操作邏輯:** 支援一鍵測試填充、Upsert 存檔、清單搜尋、資料刪除。
+            """)
+        with tab_code:
+            st.code(open("mod_crm.py", "r", encoding="utf-8").read(), language="python")
+
+    elif view == "PROJ":
+        st.warning("### 📂 模組：專案身分建檔")
+        st.write("**業務框架:** 執行年度斷代，建立 Project ID。必須連動 CRM 中的客戶名稱。")
+        st.info("程式碼編寫中...")
+
+    elif view == "NONE":
+        st.info("請點擊上方方塊查看模組細節。")
