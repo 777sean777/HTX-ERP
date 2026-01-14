@@ -6,6 +6,7 @@ def show(supabase, dept):
     st.markdown('<p class="main-header">👥 合作夥伴管理 (CRM)</p>', unsafe_allow_html=True)
 
     # --- 憲法第貳條：Dev Mode 一鍵填充 ---
+    # 這是解決你 "沒有客戶" 問題的關鍵
     if st.session_state.get("dev_mode", False):
         with st.sidebar:
             st.markdown("### 🛠️ CRM 開發工具")
@@ -24,35 +25,21 @@ def show(supabase, dept):
                 }
                 try:
                     supabase.table("partners").upsert(test_data, on_conflict="name").execute()
-                    st.toast("✅ 測試客戶 Mizuno 已生成！")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"生成失敗: {e}")
-
-            if st.button("🚀 生成測試供應商 (Supplier)"):
-                test_data_sup = {
-                    "type": "Supplier",
-                    "name": "台塑化學股份有限公司",
-                    "nationality": "Taiwan",
-                    "tax_id": "12345678",
-                    "contact_person": "王廠長",
-                    "credit_limit": 5000000.0,
-                    "trade_items": "PP粒、化工原料"
-                }
-                try:
-                    supabase.table("partners").upsert(test_data_sup, on_conflict="name").execute()
-                    st.toast("✅ 測試供應商台塑已生成！")
+                    st.toast("✅ 測試客戶 Mizuno 已生成！請前往專案建檔使用。")
                     time.sleep(1)
                     st.rerun()
                 except Exception as e:
                     st.error(f"生成失敗: {e}")
 
     # --- 1. 讀取資料 ---
-    res = supabase.table("partners").select("*").order("name").execute()
-    df_all = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    try:
+        res = supabase.table("partners").select("*").order("name").execute()
+        df_all = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception as e:
+        st.error(f"資料讀取錯誤: {e}")
+        df_all = pd.DataFrame()
 
-    # --- 2. 新增/編輯區 (Expander) ---
+    # --- 2. 新增/編輯區 ---
     with st.expander("▶️ 新增或修改夥伴資料", expanded=False):
         # 選擇對象
         target = st.selectbox("🎯 選擇對象 (留空為新增)", [""] + (df_all["name"].tolist() if not df_all.empty else []))
@@ -69,7 +56,6 @@ def show(supabase, dept):
             tax = c3.text_input("統編", value=v.get("tax_id", ""))
 
             c4, c5, c6 = st.columns(3)
-            # 憲法原子化欄位
             limit = c4.number_input("交易上限 (Credit Limit)", value=float(v.get("credit_limit", 0)))
             items = c5.text_input("交易項目", value=v.get("trade_items", ""))
             phone = c6.text_input("總機", value=v.get("company_phone", ""))
@@ -105,7 +91,6 @@ def show(supabase, dept):
     # --- 3. 列表顯示 ---
     st.divider()
     if not df_all.empty:
-        # 簡單搜尋
         search = st.text_input("🔍 搜尋夥伴...", placeholder="輸入名稱或國籍")
         if search:
             df_all = df_all[df_all.apply(lambda r: search.lower() in str(r).lower(), axis=1)]
