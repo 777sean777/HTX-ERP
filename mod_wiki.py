@@ -1,39 +1,39 @@
 import streamlit as st
 
 def show():
-    st.markdown('<p class="main-header">🛡️ HTX ERP 開發者地圖 - 規格鎖定與全盤解析</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">🛡️ HTX ERP 業務邏輯鎖定區 (V31.2.10)</p>', unsafe_allow_html=True)
 
-    # 鎖定狀態指示器 (Session State)
+    # 鎖定鍵狀態
     if 'wiki_locked' not in st.session_state: st.session_state.wiki_locked = True
     
-    col_lock, col_info = st.columns([1, 4])
+    col_lock, _ = st.columns([1, 4])
     with col_lock:
-        lock_status = st.toggle("🔒 規格鎖定鍵", value=st.session_state.wiki_locked)
-        st.session_state.wiki_locked = lock_status
-        st.write(f"狀態: {'🔴 已鎖定 (ON)' if lock_status else '🟢 可討論 (OFF)'}")
+        st.session_state.wiki_locked = st.toggle("🔒 規格鎖定鍵", value=st.session_state.wiki_locked)
+        st.write(f"狀態: {'🔴 已鎖定 (ON)' if st.session_state.wiki_locked else '🟢 可討論 (OFF)'}")
 
-    # 模組分區
-    tabs = st.tabs(["👥 夥伴管理 (CRM/SRM)", "🚀 專案建檔", "📅 36個月規劃"])
+    tab_crm, tab_code = st.tabs(["👥 夥伴管理規格", "💻 程式碼地圖"])
 
-    with tabs[0]:
-        st.success("### 📂 夥伴管理模組 (CRM/SRM) - 細節全解析")
-        t_logic, t_code = st.tabs(["💡 業務邏輯與連動", "💻 原始程式碼"])
+    with tab_crm:
+        st.success("### 📂 夥伴管理 - 原子化欄位清單")
+        st.markdown("""
+        **1. 身份分類 (Mandatory)**
+        - `type`: 必須區分 **Customer (客戶)** 與 **Supplier (供應商)**。
         
-        with t_logic:
-            st.markdown("""
-            #### 1. 身份分類 (Mandatory)
-            - 必須區分 **[Customer]** 與 **[Supplier]**，這會影響後續訂單(SO)與採購(PO)的下拉清單。
-            #### 2. 原子化聯絡網 (Atomic Contacts)
-            - **[財務窗口]**: 姓名、專用電郵 (對帳用)。
-            - **[業務窗口]**: 姓名、專用電郵、手機。
-            #### 3. 風險控管
-            - **[Credit Limit]**: 建議交易金額上限。連動至『採購錄入』時進行預警。
-            #### 4. 連動關係
-            - 此表為 `projects` 的父表 (Customer)。
-            - 此表為 `transactions` 的關聯項 (Supplier/Customer)。
-            """)
-        with t_code:
-            try:
-                with open("mod_crm.py", "r", encoding="utf-8") as f:
-                    st.code(f.read(), language="python")
-            except: st.error("檔案讀取中...")
+        **2. 公司基礎資料 (Atomic)**
+        - `name`: 公司名稱 | `nationality`: 公司國籍
+        - `tax_id`: 統一編號 | `address`: 公司地址
+        - `main_phone`: 公司總機 | `main_email`: 公司通用電郵
+        - `trade_items`: 交易項目 | `credit_limit`: 建議交易金額上限
+        
+        **3. 財務聯絡窗口 (Finance Contact)**
+        - `fin_name`: 姓名 | `fin_email`: 專用電郵
+        
+        **4. 業務聯絡窗口 (Sales Contact)**
+        - `sales_name`: 姓名 | `sales_email`: 專用電郵 | `sales_mobile`: 手機號碼
+        """)
+    
+    with tab_code:
+        try:
+            with open("mod_crm.py", "r", encoding="utf-8") as f:
+                st.code(f.read(), language="python")
+        except: st.error("mod_crm.py 檔案讀取失敗")
