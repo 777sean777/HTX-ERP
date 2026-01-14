@@ -1,100 +1,118 @@
 import streamlit as st
 import pandas as pd
+import time
 
 def show(supabase, dept):
-    st.markdown('<p class="main-header">👥 合作夥伴管理 (CRM/SRM) - 依憲修正版</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">👥 合作夥伴管理 (CRM)</p>', unsafe_allow_html=True)
 
-    # --- 1. 資料庫即時讀取 ---
+    # --- 憲法第貳條：Dev Mode 一鍵填充 ---
+    if st.session_state.get("dev_mode", False):
+        with st.sidebar:
+            st.markdown("### 🛠️ CRM 開發工具")
+            if st.button("🚀 生成測試客戶 (Customer)"):
+                test_data = {
+                    "type": "Customer",
+                    "name": "Mizuno (美津濃)",
+                    "nationality": "Japan",
+                    "tax_id": "JP-88889999",
+                    "company_email": "purchase@mizuno.jp",
+                    "finance_person": "田中 財務長",
+                    "finance_email": "finance@mizuno.jp",
+                    "contact_person": "佐藤 經理", 
+                    "credit_limit": 2000000.0,
+                    "trade_items": "機能布料、運動成衣"
+                }
+                try:
+                    supabase.table("partners").upsert(test_data, on_conflict="name").execute()
+                    st.toast("✅ 測試客戶 Mizuno 已生成！")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"生成失敗: {e}")
+
+            if st.button("🚀 生成測試供應商 (Supplier)"):
+                test_data_sup = {
+                    "type": "Supplier",
+                    "name": "台塑化學股份有限公司",
+                    "nationality": "Taiwan",
+                    "tax_id": "12345678",
+                    "contact_person": "王廠長",
+                    "credit_limit": 5000000.0,
+                    "trade_items": "PP粒、化工原料"
+                }
+                try:
+                    supabase.table("partners").upsert(test_data_sup, on_conflict="name").execute()
+                    st.toast("✅ 測試供應商台塑已生成！")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"生成失敗: {e}")
+
+    # --- 1. 讀取資料 ---
     res = supabase.table("partners").select("*").order("name").execute()
     df_all = pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
-    # --- 2. 編輯/新增區 (Expander 模式) ---
-    with st.expander("▶️ 錄入/修改夥伴細節 (符合原子化規格)", expanded=False):
-        # 選擇欲修改對象
-        target = st.selectbox("🎯 選擇欲修改對象 (留空為新增)", [""] + (df_all["name"].tolist() if not df_all.empty else []))
+    # --- 2. 新增/編輯區 (Expander) ---
+    with st.expander("▶️ 新增或修改夥伴資料", expanded=False):
+        # 選擇對象
+        target = st.selectbox("🎯 選擇對象 (留空為新增)", [""] + (df_all["name"].tolist() if not df_all.empty else []))
         v = df_all[df_all['name'] == target].iloc[0] if target else {}
 
-        with st.form("crm_atomic_form_v3"):
-            st.subheader("🏢 公司主體資訊")
-            p_type = st.radio("身分分類 (Mandatory)", ["Customer", "Supplier"], horizontal=True, 
-                              index=0 if v.get('type')=='Customer' else 1)
+        with st.form("crm_atomic_form"):
+            st.subheader("🏢 公司主體")
+            c_type = st.radio("身分", ["Customer", "Supplier"], horizontal=True, 
+                              index=0 if v.get('type') != 'Supplier' else 1)
             
             c1, c2, c3 = st.columns(3)
-            name = c1.text_input("公司全名", value=v.get("name", ""), disabled=True if target else False)
-            nation = c2.text_input("公司國籍", value=v.get("nationality", ""))
-            tax_id = c3.text_input("統一編號", value=v.get("tax_id", ""))
-            
-            addr = st.text_input("公司地址", value=v.get("company_address", ""))
-            
+            name = c1.text_input("公司名稱", value=v.get("name", ""), disabled=bool(target))
+            nation = c2.text_input("國籍", value=v.get("nationality", ""))
+            tax = c3.text_input("統編", value=v.get("tax_id", ""))
+
             c4, c5, c6 = st.columns(3)
-            phone = c4.text_input("公司總機", value=v.get("company_phone", ""))
-            mail = c5.text_input("公司通用電郵", value=v.get("company_email", ""))
-            limit = c6.number_input("建議交易金額上限 (Credit Limit)", value=float(v.get("credit_limit", 0)))
+            # 憲法原子化欄位
+            limit = c4.number_input("交易上限 (Credit Limit)", value=float(v.get("credit_limit", 0)))
+            items = c5.text_input("交易項目", value=v.get("trade_items", ""))
+            phone = c6.text_input("總機", value=v.get("company_phone", ""))
 
             st.divider()
-            # 財務窗口 (符合憲法第3條)
             f_col, s_col = st.columns(2)
             with f_col:
-                st.subheader("💰 財務聯絡窗口")
-                f_n = st.text_input("財務姓名 (fin_name)", value=v.get("finance_person", ""))
-                f_e = st.text_input("財務電郵 (fin_email)", value=v.get("finance_email", ""))
-                f_p = st.text_input("財務電話 (fin_phone)", value=v.get("finance_phone", "")) # 憲法補足項
-            
-            # 業務窗口 (符合憲法第4條)
+                st.markdown("#### 💰 財務窗口")
+                f_n = st.text_input("姓名", value=v.get("finance_person", ""), key="fn")
+                f_e = st.text_input("電郵", value=v.get("finance_email", ""), key="fe")
+                f_p = st.text_input("電話", value=v.get("finance_phone", ""), key="fp")
             with s_col:
-                st.subheader("🤝 業務聯絡窗口")
-                s_n = st.text_input("業務姓名 (sales_name)", value=v.get("contact_person", ""))
-                s_e = st.text_input("業務電郵 (sales_email)", value=v.get("contact_email", ""))
-                s_m = st.text_input("業務手機 (sales_mobile)", value=v.get("contact_mobile", ""))
-            
-            st.divider()
-            items = st.text_input("交易項目 (trade_items)", value=v.get("trade_items", ""))
-            remark = st.text_area("備註 (remarks)", value=v.get("remarks", ""))
-            
-            if st.form_submit_button("💾 執行依憲存檔"):
-                save_data = {
-                    "type": p_type, "name": name, "nationality": nation, "tax_id": tax_id,
-                    "company_address": addr, "company_phone": phone, "company_email": mail,
-                    "credit_limit": limit, "finance_person": f_n, "finance_email": f_e, "finance_phone": f_p,
-                    "contact_person": s_n, "contact_email": s_e, "contact_mobile": s_m,
-                    "trade_items": items, "remarks": remark
-                }
-                supabase.table("partners").upsert(save_data, on_conflict="name").execute()
-                st.success(f"✅ 夥伴 {name} 資料已根據憲法規格同步更新")
-                st.rerun()
+                st.markdown("#### 🤝 業務窗口")
+                s_n = st.text_input("姓名", value=v.get("contact_person", ""), key="sn")
+                s_e = st.text_input("電郵", value=v.get("contact_email", ""), key="se")
+                s_m = st.text_input("手機", value=v.get("contact_mobile", ""), key="sm")
 
-    # --- 3. 檢索與卡片式看板 ---
+            if st.form_submit_button("💾 儲存資料"):
+                save_data = {
+                    "type": c_type, "name": name, "nationality": nation, "tax_id": tax,
+                    "credit_limit": limit, "trade_items": items, "company_phone": phone,
+                    "finance_person": f_n, "finance_email": f_e, "finance_phone": f_p,
+                    "contact_person": s_n, "contact_email": s_e, "contact_mobile": s_m
+                }
+                try:
+                    supabase.table("partners").upsert(save_data, on_conflict="name").execute()
+                    st.success(f"✅ {name} 儲存成功")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"儲存失敗: {e}")
+
+    # --- 3. 列表顯示 ---
     st.divider()
-    search = st.text_input("🔍 快速檢索 (公司、國籍、項目或窗口)...").strip()
-    
     if not df_all.empty:
-        # 篩選邏輯
-        mask = df_all.apply(lambda r: search.lower() in str(r).lower(), axis=1)
-        filtered = df_all[mask]
-        
-        for _, row in filtered.iterrows():
+        # 簡單搜尋
+        search = st.text_input("🔍 搜尋夥伴...", placeholder="輸入名稱或國籍")
+        if search:
+            df_all = df_all[df_all.apply(lambda r: search.lower() in str(r).lower(), axis=1)]
+
+        for _, row in df_all.iterrows():
             with st.container(border=True):
-                col_h, col_l = st.columns([4, 1])
+                c_head, c_info = st.columns([3, 1])
                 badge = "🟦 客戶" if row['type'] == 'Customer' else "🟧 供應商"
-                col_h.markdown(f"#### {badge} | {row['name']} ({row['nationality']})")
-                col_l.markdown(f"**交易上限:** `${row['credit_limit']:,.0f}`")
-                
-                # 精簡模式，點擊才展開
-                with st.expander("▶️ 點擊檢閱完整聯絡規格"):
-                    d1, d2 = st.columns(2)
-                    with d1:
-                        st.write(f"**統編:** {row['tax_id']}")
-                        st.write(f"**公司電郵:** {row['company_email']}")
-                        st.markdown(f"**💰 財務:** {row['finance_person']} / {row['finance_email']} ({row.get('finance_phone')})")
-                    with d2:
-                        st.write(f"**公司地址:** {row['company_address']}")
-                        st.write(f"**交易項目:** {row['trade_items']}")
-                        st.markdown(f"**🤝 業務:** {row['contact_person']} / {row['contact_mobile']} / {row['contact_email']}")
-                    
-                    st.caption(f"備註: {row['remarks']}")
-                    
-                    if st.button("🗑️ 刪除", key=f"del_{row['name']}"):
-                        supabase.table("partners").delete().eq("name", row['name']).execute()
-                        st.rerun()
-    else:
-        st.info("尚無夥伴資料，請展開上方選單新增。")
+                c_head.markdown(f"**{badge} | {row['name']}** <small>({row['nationality']})</small>", unsafe_allow_html=True)
+                c_info.markdown(f"額度: `${row['credit_limit']:,.0f}`")
