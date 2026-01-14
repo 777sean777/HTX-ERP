@@ -1,36 +1,25 @@
 import streamlit as st
 
 def show():
-    st.markdown('<p class="main-header">🛡️ HTX ERP 開發者地圖 - 業務邏輯鎖定區</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">🛡️ HTX ERP 業務邏輯鎖定區 (V31.2.09)</p>', unsafe_allow_html=True)
     
-    # 鎖定狀態控制 (模擬鎖定鈕功能)
-    if "wiki_locked" not in st.session_state:
-        st.session_state.wiki_locked = True
-    
-    lock_status = "🔒 已鎖定" if st.session_state.wiki_locked else "🔓 已解鎖"
-    if st.button(f"{lock_status} (點擊解鎖需先與開發者討論)"):
-        if st.session_state.wiki_locked:
-            st.warning("⚠️ 警告：解鎖將允許變更核心框架邏輯，請確保已完成討論。")
-            st.session_state.wiki_locked = False
-        else:
-            st.session_state.wiki_locked = True
-        st.rerun()
+    if st.button("👥 夥伴管理 (CRM/SRM) 規格鎖定", use_container_width=True):
+        st.session_state.focus_wiki = "CRM"
 
+    focus = st.session_state.get("focus_wiki", "CRM")
     st.divider()
 
-    # 夥伴管理規格 - 強制原子化
-    st.success("### 📂 夥伴管理模組 (CRM/SRM) - 原子化欄位清單")
-    st.markdown("""
-    | 分類 | 鎖定欄位名稱 | 資料類型 | 說明 (一格一資訊) |
-    | :--- | :--- | :--- | :--- |
-    | **基本** | `comp_name` | String (PK) | 公司全稱 |
-    | **基本** | `tax_id` | String | 統一編號 |
-    | **聯繫** | `comp_tel` | String | **公司總機電話** (獨立) |
-    | **聯繫** | `comp_email` | String | **公司官方/財務電郵** (獨立) |
-    | **聯繫** | `contact_name` | String | 主要聯絡人姓名 |
-    | **聯繫** | `contact_email` | String | **聯絡人個人電郵** (獨立) |
-    | **風險** | `credit_limit` | Float | 建議交易金額上限 |
-    """)
-    
-    if st.session_state.wiki_locked:
-        st.info("ℹ️ 當前處於鎖定狀態：AI 禁止私自刪除或合併上述欄位。")
+    if focus == "CRM":
+        st.success("### 📂 夥伴管理模組 - 原子化欄位清單 (Locked)")
+        st.markdown("""
+        **1. 公司通訊 (一格一資訊)**
+        - `company_email`: 公司通用電郵
+        - `finance_email`: **財務專用電郵 (新增/鎖定)**
+        - `company_phone`: 公司總機電話
+        - `company_address`: 公司登記地址
+        
+        **2. 聯絡窗口 (一格一資訊)**
+        - `contact_name`: 窗口姓名
+        - `contact_mobile`: 窗口手機
+        - `contact_email`: 窗口個人電郵
+        """)
