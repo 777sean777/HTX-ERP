@@ -29,12 +29,12 @@ def show(supabase):
         res_po = supabase.table("purchase_orders").select("po_number").order("created_at", desc=True).execute()
         existing_pos = [p['po_number'] for p in res_po.data]
     except:
-        st.error("資料讀取失敗")
+        st.error("資料讀取失敗，請檢查資料庫連線。")
         return
 
     # --- 2. 編輯/新增 切換 ---
     c_sel, _ = st.columns([3, 1])
-    target_po = c_sel.selectbox("✏️ 選擇要編輯的採購單", ["(建立新採購單)"] + existing_pos)
+    target_po = c_sel.selectbox("✏️ 選擇要編輯的採購單 (或建立新單)", ["(建立新採購單)"] + existing_pos)
 
     # Session State 初始化
     if "current_po_target" not in st.session_state:
@@ -45,9 +45,36 @@ def show(supabase):
         st.session_state.current_po_target = target_po
         if target_po == "(建立新採購單)":
             st.session_state.po_form_data = get_empty_form()
+            st.toast("已切換至新單模式")
         else:
             load_po_data(supabase, target_po)
             st.toast(f"已載入 {target_po}")
+
+    # --- 憲法 Dev Mode 一鍵填充 ---
+    if st.session_state.get("dev_mode", False):
+        with st.sidebar:
+            st.markdown("### 🛠️ PO 開發工具")
+            if st.button("🚀 填入測試採購 (Test PO)"):
+                mock_items = pd.DataFrame([
+                    {"品項": "PP塑膠粒-T500", "規格": "25kg/包", "數量": 200, "單價": 450},
+                    {"品項": "色母-黑色", "規格": "1kg/罐", "數量": 10, "單價": 1000}
+                ])
+                mock_pays = pd.DataFrame([
+                    {"期數": "月結60天", "預計付款日": date(2026, 3, 31), "金額": 100000}
+                ])
+                st.session_state.po_form_data = {
+                    "po_no": "PO-20260115-001", 
+                    "project_code": "", 
+                    "supplier_name": supp_options[0] if supp_options else "",
+                    "cost_item": "3.1 原料採購成本",
+                    "order_date": date.today(), 
+                    "tax_type": "含稅",
+                    "items": mock_items, 
+                    "payments": mock_pays
+                }
+                st.toast("✅ 測試數據已填入")
+                time.sleep(0.5)
+                st.rerun()
 
     form_data = st.session_state.po_form_data
 
@@ -74,8 +101,14 @@ def show(supabase):
                 def_supp_idx = supp_options.index(form_data["supplier_name"])
             sel_supp = c2.selectbox("供應商 (Supplier)", supp_options, index=def_supp_idx)
 
+            # 顯示供應商額度
+            supp_limit = 0
+            if sel_supp:
+                supp_limit = supp_map[sel_supp]['credit_limit']
+                c2.caption(f"ℹ️ 該供應商交易額度上限: ${supp_limit:,.0f}")
+
             c3, c4, c5, c6 = st.columns(4)
-            po_no = c3.text_input("採購單號 (PO No.)", value=form_data["po_no"], disabled=(target_po != "(建立新採購單)"))
+            po_no = c3.text_input("採購單號", value=form_data["po_no"], disabled=(target_po != "(建立新採購單)"))
             
             # 科目選擇
             def_cost_idx = 0
@@ -85,10 +118,13 @@ def show(supabase):
             
             # 日期處理
             try:
-                order_date = c5.date_input("採購日期", value=form_data["order_date"])
-            except:
-                order_date = c5.date_input("採購日期", value=date.today())
-                
+                if isinstance(form_data["order_date"], str):
+                    order_d = datetime.strptime(form_data["order_date"], "%Y-%m-%d").date()
+                else:
+                    order_d = form_data["order_date"]
+            except: order_d = date.today()
+            
+            order_date = c5.date_input("採購日期", value=order_d)
             tax_type = c6.selectbox("稅別", ["含稅", "未稅"], index=0 if form_data["tax_type"] == "含稅" else 1)
 
             # B. 明細
@@ -101,13 +137,15 @@ def show(supabase):
             po_total = 0
             if not edited_items.empty:
                 try:
-                    edited_items["小計"] = edited_items["數量"] * edited_items["單價"]
+                    edited_items["小計"] = edited_items["數量"].astype(float) * edited_items["單價"].astype(float)
                     po_total = edited_items["小計"].sum()
                 except: pass
             st.metric("採購總額", f"${po_total:,.0f}")
 
             # C. 付款計畫
             st.markdown("#### 3. 付款計畫 (Payment Schedule)")
+            
+            # 日期防呆
             df_pay = form_data["payments"].copy()
             if not df_pay.empty and "預計付款日" in df_pay.columns:
                 df_pay["預計付款日"] = pd.to_datetime(df_pay["預計付款日"]).dt.date
@@ -117,28 +155,31 @@ def show(supabase):
                 column_config={"預計付款日": st.column_config.DateColumn(format="YYYY-MM-DD", required=True), "金額": st.column_config.NumberColumn(required=True)}
             )
             
-            pay_total = edited_payments["金額"].sum() if not edited_payments.empty else 0
+            pay_total = 0
+            if not edited_payments.empty:
+                try:
+                    pay_total = edited_payments["金額"].sum()
+                except: pass
+                
             diff = po_total - pay_total
             
-            # D. 風控檢核 (憲法 5-2)
+            # D. 檢核與風控 (憲法 5-2)
             is_valid = True
-            risk_msg = ""
             
-            if diff != 0:
+            # 1. 金額檢核
+            if diff == 0 and po_total > 0:
+                st.success(f"✅ 金額檢核通過：採購總額 ${po_total:,.0f} 與付款總額相符。")
+            else:
                 is_valid = False
-                st.error(f"❌ 金額不符：採購總額 ${po_total:,.0f} vs 付款總額 ${pay_total:,.0f}")
-            
-            # 檢查 Credit Limit
-            if sel_supp:
-                limit = supp_map[sel_supp]['credit_limit']
-                # 這裡為了效能，暫時不查歷史累計，只比對單筆 (未來可加強)
-                if limit > 0 and po_total > limit:
-                    # 其實應該查累計，但現在先做單筆提醒
-                    st.warning(f"⚠️ 注意：本單金額 (${po_total:,.0f}) 超過該供應商額度設定 (${limit:,.0f})")
-                    # 風控是否要擋？憲法說是 "紅色阻擋警示"，所以我們設為 False
-                    is_valid = False
-                    risk_msg = f"⛔ 風控攔截：超過交易額度上限 ${limit:,.0f}"
-                    st.error(risk_msg)
+                if po_total == 0:
+                    st.warning("⚠️ 請輸入採購明細")
+                else:
+                    st.error(f"❌ 金額不符！差額: ${diff:,.0f}")
+
+            # 2. Credit Limit 風控
+            if sel_supp and supp_limit > 0 and po_total > supp_limit:
+                is_valid = False
+                st.error(f"⛔ 風控攔截：本單金額 ${po_total:,.0f} 已超過供應商額度上限 ${supp_limit:,.0f}！")
 
             # E. 存檔
             btn_txt = "💾 更新採購單" if target_po != "(建立新採購單)" else "💾 建立採購單"
@@ -146,7 +187,7 @@ def show(supabase):
             
             if submitted:
                 if not is_valid:
-                    st.error("無法存檔，請修正上述錯誤。")
+                    st.error("無法存檔，請修正上述錯誤 (金額不符或超過額度)。")
                 elif not po_no or not sel_proj:
                     st.error("單號與專案為必填")
                 else:
@@ -176,7 +217,10 @@ def load_po_data(supabase, po_no):
         
         df_items = pd.DataFrame(items).rename(columns={"product_name": "品項", "spec": "規格", "quantity": "數量", "unit_price": "單價"})
         df_pays = pd.DataFrame(pays).rename(columns={"term_name": "期數", "expected_date": "預計付款日", "amount": "金額"})
-        if not df_pays.empty: df_pays["預計付款日"] = pd.to_datetime(df_pays["預計付款日"]).dt.date
+        
+        # 轉 Date 物件
+        if not df_pays.empty and "預計付款日" in df_pays.columns:
+            df_pays["預計付款日"] = pd.to_datetime(df_pays["預計付款日"]).dt.date
 
         st.session_state.po_form_data = {
             "po_no": head["po_number"], "project_code": head["project_code"], 
@@ -184,7 +228,8 @@ def load_po_data(supabase, po_no):
             "order_date": datetime.strptime(head["order_date"], "%Y-%m-%d").date(),
             "tax_type": head["tax_type"], "items": df_items, "payments": df_pays
         }
-    except: st.error("載入失敗")
+    except Exception as e: 
+        st.error(f"載入失敗: {e}")
 
 def save_po(supabase, po_no, p_code, supp_id, cost_item, order_date, tax_type, total, items_df, pay_df):
     try:
@@ -211,21 +256,11 @@ def save_po(supabase, po_no, p_code, supp_id, cost_item, order_date, tax_type, t
                 pay_data.append({"po_number": po_no, "term_name": r.get("期數"), "expected_date": str(r["預計付款日"]), "amount": float(r["金額"])})
         if pay_data: supabase.table("po_payments").insert(pay_data).execute()
 
-        # Matrix Sync (Real Cost)
-        # 1. 算出該專案、該科目 的所有 PO 付款總和
-        # (這裡做簡化：直接把本單加進去，嚴謹做法應全域重算)
-        # 為了 MVP，我們先只同步這一張單
-        # 更好的做法：Query all PO payments for this project & cost_item
-        
-        # 這裡我們用一個簡單的 Upsert 邏輯：
-        # 對於每一筆付款，更新矩陣對應月份的 Real Cost
-        # 注意：多張 PO 可能對應同一個月同一個科目，所以不能直接覆蓋，要「累加」
-        # 但 Streamlit 端很難做原子累加。
-        # ★★★ 妥協方案 ★★★：每次存檔 PO，重新計算該專案該科目的所有 PO 總額
-        
+        # Sync Matrix
         sync_po_matrix(supabase, p_code, cost_item)
 
         st.success("✅ 採購單儲存成功，費用已計入矩陣！")
+        st.session_state.current_po_target = "(建立新採購單)"
         st.session_state.po_form_data = get_empty_form()
         time.sleep(1)
         st.rerun()
@@ -233,8 +268,7 @@ def save_po(supabase, po_no, p_code, supp_id, cost_item, order_date, tax_type, t
         st.error(f"存檔失敗: {e}")
 
 def sync_po_matrix(supabase, p_code, cost_item):
-    # 找出該專案、該科目下，所有 PO 的付款計畫
-    # 關聯路徑：po_payments -> purchase_orders -> (filter project & cost_item)
+    # 算出該專案、該科目下，所有 PO 的付款計畫
     res = supabase.table("po_payments").select("expected_date, amount, purchase_orders!inner(project_code, cost_item)")\
         .eq("purchase_orders.project_code", p_code)\
         .eq("purchase_orders.cost_item", cost_item)\
@@ -274,4 +308,6 @@ def render_po_list(supabase):
                         st.toast("已刪除")
                         time.sleep(1)
                         st.rerun()
+        else:
+            st.info("尚無採購單")
     except: pass
