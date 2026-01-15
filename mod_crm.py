@@ -5,10 +5,12 @@ import time
 def show(supabase, dept):
     st.markdown('<p class="main-header">👥 合作夥伴管理 (CRM)</p>', unsafe_allow_html=True)
 
-    # --- Dev Mode 生成工具 ---
+    # --- 憲法第貳條：Dev Mode 一鍵填充 ---
     if st.session_state.get("dev_mode", False):
         with st.sidebar:
             st.markdown("### 🛠️ CRM 開發工具")
+            
+            # 1. 生成客戶
             if st.button("🚀 生成測試客戶 (Customer)"):
                 test_data = {
                     "type": "Customer",
@@ -22,15 +24,42 @@ def show(supabase, dept):
                     "contact_person": "佐藤 經理",
                     "contact_email": "sato@mizuno.jp",
                     "contact_mobile": "0900-111-222", 
-                    "credit_limit": 2000000.0,
+                    "credit_limit": 0.0, # 客戶通常不設採購額度
                     "trade_items": "機能布料、運動成衣",
                     "company_phone": "+81-3-0000-1111",
                     "company_address": "日本大阪府大阪市住之江區"
                 }
                 try:
                     supabase.table("partners").upsert(test_data, on_conflict="name").execute()
-                    st.toast("✅ 測試客戶 Mizuno 已生成！")
-                    time.sleep(1)
+                    st.toast("✅ 測試客戶 [Mizuno] 已生成！")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"生成失敗: {e}")
+
+            # 2. 生成供應商 (NEW!)
+            if st.button("🏭 生成測試供應商 (Supplier)"):
+                test_supp = {
+                    "type": "Supplier",
+                    "name": "台塑化學 (Formosa Plastics)",
+                    "nationality": "Taiwan",
+                    "tax_id": "11223344",
+                    "company_email": "sales@formosa.com.tw",
+                    "finance_person": "王會計",
+                    "finance_email": "acc@formosa.com.tw",
+                    "finance_phone": "02-2712-2211 #123",
+                    "contact_person": "陳廠長",
+                    "contact_email": "chen@formosa.com.tw", 
+                    "contact_mobile": "0912-345-678",
+                    "credit_limit": 5000000.0, # 設定 500 萬額度供 PO 測試
+                    "trade_items": "PP粒、機能性纖維原料",
+                    "company_phone": "02-2712-2211",
+                    "company_address": "台北市松山區敦化北路201號"
+                }
+                try:
+                    supabase.table("partners").upsert(test_supp, on_conflict="name").execute()
+                    st.toast("✅ 測試供應商 [台塑化學] 已生成！")
+                    time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
                     st.error(f"生成失敗: {e}")
@@ -40,28 +69,25 @@ def show(supabase, dept):
         res = supabase.table("partners").select("*").order("name").execute()
         df_all = pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except Exception as e:
-        st.error(f"讀取資料庫失敗: {e}")
+        st.error(f"資料讀取錯誤: {e}")
         df_all = pd.DataFrame()
 
     # --- 2. 新增/編輯區 ---
     with st.expander("▶️ 新增或修改夥伴資料", expanded=True):
-        
-        # 選擇對象
         target = st.selectbox("🎯 選擇對象 (留空為新增)", [""] + (df_all["name"].tolist() if not df_all.empty else []), key="crm_target_select")
         
-        # 抓取資料邏輯
         v = {}
         if target and not df_all.empty:
             filtered = df_all[df_all['name'] == target]
             if not filtered.empty:
                 v = filtered.iloc[0].to_dict()
 
-        # 為了讓輸入框在切換客戶時能自動更新，給每個 widget 一個獨一無二的 key
         k_suffix = str(target) if target else "new"
 
         with st.form("crm_atomic_form"):
             st.subheader("🏢 公司主體")
             
+            # 如果是新增，預設 Customer；如果是編輯，依據資料顯示
             type_idx = 1 if v.get('type') == 'Supplier' else 0
             c_type = st.radio("身分", ["Customer", "Supplier"], horizontal=True, index=type_idx, key=f"type_{k_suffix}")
             
@@ -74,7 +100,7 @@ def show(supabase, dept):
 
             c4, c5, c6 = st.columns(3)
             limit_val = float(v.get("credit_limit")) if v.get("credit_limit") else 0.0
-            limit = c4.number_input("交易上限 (Credit Limit)", value=limit_val, step=10000.0, key=f"limit_{k_suffix}")
+            limit = c4.number_input("交易上限 (Credit Limit)", value=limit_val, step=10000.0, key=f"limit_{k_suffix}", help="供應商採購風控金額")
             items = c5.text_input("交易項目", value=v.get("trade_items", ""), key=f"items_{k_suffix}")
             phone = c6.text_input("總機", value=v.get("company_phone", ""), key=f"phone_{k_suffix}")
             
@@ -110,7 +136,7 @@ def show(supabase, dept):
                 except Exception as e:
                     st.error(f"儲存失敗: {e}")
 
-    # --- 3. 列表顯示 (含刪除功能) ---
+    # --- 3. 列表顯示 ---
     st.divider()
     if not df_all.empty:
         st.subheader("📋 夥伴名單")
@@ -128,15 +154,13 @@ def show(supabase, dept):
                 limit_show = float(row.get('credit_limit')) if row.get('credit_limit') else 0
                 c_info.markdown(f"額度: `${limit_show:,.0f}`")
                 
-                # [新增] 刪除功能區
-                with st.expander("⚙️ 管理此夥伴"):
+                with st.expander(f"⚙️ 管理 {row['name']}"):
                     st.write(f"統一編號: {row.get('tax_id', '無')}")
-                    # 使用 row['id'] 作為 key 確保唯一性
-                    if st.button(f"🗑️ 永久刪除 {row['name']}", key=f"del_{row['id']}"):
+                    if st.button(f"🗑️ 永久刪除", key=f"del_{row['id']}"):
                         try:
                             supabase.table("partners").delete().eq("id", row['id']).execute()
-                            st.warning(f"已刪除 {row['name']}")
+                            st.toast(f"已刪除 {row['name']}")
                             time.sleep(1)
                             st.rerun()
                         except Exception as e:
-                            st.error(f"刪除失敗 (可能已被專案引用): {e}")
+                            st.error(f"刪除失敗 (可能已被使用): {e}")
