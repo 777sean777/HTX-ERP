@@ -2,7 +2,7 @@ import streamlit as st
 import core_engine
 
 # --- 系統版本 ---
-VERSION = "V2026.01.15-Build01" 
+VERSION = "V2026.01.15-Build02-Full" 
 st.set_page_config(page_title=f"HTX ERP {VERSION}", layout="wide")
 
 # --- 初始化核心 ---
@@ -12,13 +12,11 @@ supabase = core_engine.init_connection()
 # --- 憲法第貳條：側邊欄 Dev Mode ---
 with st.sidebar:
     try:
-        # 如果你有 logo.png 可以放，沒有會自動忽略
         st.image("logo.png", use_container_width=True)
     except:
         st.write("HTX ERP System")
     
     st.markdown("---")
-    # Master Switch
     if 'dev_mode' not in st.session_state: st.session_state.dev_mode = False
     st.session_state.dev_mode = st.toggle("🛠️ 開發者模式 (Dev Mode)", value=st.session_state.dev_mode)
     
@@ -33,9 +31,10 @@ menu = {
     "crm": "👥 合作夥伴管理",
     "project": "🚀 專案身分建檔",
     "matrix": "📅 專案36個月預算",
-    "so": "📝 銷售訂單 (SO)",  # [New] 銷售訂單
+    "so": "📝 銷售訂單 (SO)", 
+    "po": "🛒 採購訂單 (PO)", # [New] 採購訂單
     "inventory": "📦 倉儲與庫存",
-    "finance": "📊 經營決策看板" # [New] 專案總攬
+    "finance": "📊 經營決策看板"
 }
 choice_label = st.sidebar.radio("功能導航", list(menu.values()))
 
@@ -45,9 +44,7 @@ choice = [k for k, v in menu.items() if v == choice_label][0]
 # --- 路由分發 ---
 try:
     if choice == "home":
-        # 憲法第壹條：首頁即看板
         st.title("🏠 財務任務中心 (Financial Task Center)")
-        # 這裡未來會放真正的任務，目前先留空
         c1, c2 = st.columns(2)
         with c1:
             with st.container(border=True):
@@ -60,7 +57,7 @@ try:
 
     elif choice == "crm":
         import mod_crm
-        mod_crm.show(supabase, "HTT") # 暫時預設部門
+        mod_crm.show(supabase, "HTT")
 
     elif choice == "project":
         import mod_project_init
@@ -71,18 +68,18 @@ try:
         mod_matrix.show(supabase)
 
     elif choice == "so":
-        # 🟢 掛載銷售訂單模組
-        # 請確保你已經建立了 mod_so.py，否則點擊會報錯
         import mod_so
         mod_so.show(supabase)
 
+    elif choice == "po":
+        # 🟢 掛載採購模組
+        import mod_po
+        mod_po.show(supabase)
+
     elif choice == "inventory":
-        # import mod_inventory
-        # mod_inventory.show(supabase)
         st.info("🚧 倉儲模組開發中... 請依照憲法進度開發")
 
     elif choice == "finance":
-        # 🟢 這裡解開了！掛載 專案總攬看板
         import mod_project_dashboard
         mod_project_dashboard.show(supabase)
 
