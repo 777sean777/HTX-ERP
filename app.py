@@ -2,7 +2,7 @@ import streamlit as st
 import core_engine
 
 # --- 系統版本 ---
-VERSION = "V2026.01.14-Build02" # 更新版本號
+VERSION = "V2026.01.15-Build01" 
 st.set_page_config(page_title=f"HTX ERP {VERSION}", layout="wide")
 
 # --- 初始化核心 ---
@@ -32,9 +32,10 @@ menu = {
     "home": "🏠 財務任務中心 (首頁)",
     "crm": "👥 合作夥伴管理",
     "project": "🚀 專案身分建檔",
-    "matrix": "📅 專案36個月預算", # 這一頁現在生效了
+    "matrix": "📅 專案36個月預算",
+    "so": "📝 銷售訂單 (SO)",  # [New] 銷售訂單
     "inventory": "📦 倉儲與庫存",
-    "finance": "📊 經營決策看板"
+    "finance": "📊 經營決策看板" # [New] 專案總攬
 }
 choice_label = st.sidebar.radio("功能導航", list(menu.values()))
 
@@ -46,18 +47,16 @@ try:
     if choice == "home":
         # 憲法第壹條：首頁即看板
         st.title("🏠 財務任務中心 (Financial Task Center)")
-        st.info("🚧 系統初始化中... 待 SO/PO 模組建立後，此處將自動掃描待辦款項。")
-        
-        # 預留看板空位
+        # 這裡未來會放真正的任務，目前先留空
         c1, c2 = st.columns(2)
         with c1:
             with st.container(border=True):
                 st.subheader("📥 本月應開立發票 (AR)")
-                st.caption("尚無待辦事項 (需連接 SO 模組)")
+                st.caption("連動 SO 模組開發中...")
         with c2:
             with st.container(border=True):
                 st.subheader("📤 本月應付帳款 (AP)")
-                st.caption("尚無待辦事項 (需連接 PO 模組)")
+                st.caption("連動 PO 模組開發中...")
 
     elif choice == "crm":
         import mod_crm
@@ -68,12 +67,27 @@ try:
         mod_project_init.show(supabase)
 
     elif choice == "matrix":
-        # 🟢 這裡解開了！連接 mod_matrix.py
         import mod_matrix
         mod_matrix.show(supabase)
 
+    elif choice == "so":
+        # 🟢 掛載銷售訂單模組
+        # 請確保你已經建立了 mod_so.py，否則點擊會報錯
+        import mod_so
+        mod_so.show(supabase)
+
+    elif choice == "inventory":
+        # import mod_inventory
+        # mod_inventory.show(supabase)
+        st.info("🚧 倉儲模組開發中... 請依照憲法進度開發")
+
+    elif choice == "finance":
+        # 🟢 這裡解開了！掛載 專案總攬看板
+        import mod_project_dashboard
+        mod_project_dashboard.show(supabase)
+
     else:
-        st.warning(f"🚧 {choice_label} 模組建置中，請依照 Wiki 憲法進度開發。")
+        st.warning(f"🚧 {choice_label} 模組建置中...")
 
 except Exception as e:
     st.error("系統發生預期外錯誤")
