@@ -220,4 +220,71 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
         payments_data = []
         if not pays_df.empty:
             for _, row in pays_df.iterrows():
-                if row.get("金額",
+                if row.get("金額", 0) > 0:
+                    payments_data.append({
+                        "so_number": so_no, "term_name": row.get("期數名稱", ""),
+                        "expected_date": str(row["預計收款日"]), "amount": float(row["金額"])
+                    })
+
+        so_header = {
+            "so_number": so_no, "project_code": p_code, "cust_id": cust_id,
+            "contract_no": contract_no, "order_date": str(order_date),
+            "tax_type": tax_type, "total_amount": final_total, "status": "Confirmed"
+        }
+        supabase.table("sales_orders").upsert(so_header).execute()
+
+        supabase.table("so_items").delete().eq("so_number", so_no).execute()
+        if items_data: supabase.table("so_items").insert(items_data).execute()
+
+        supabase.table("so_payments").delete().eq("so_number", so_no).execute()
+        if payments_data: supabase.table("so_payments").insert(payments_data).execute()
+
+        sync_matrix(supabase, p_code)
+
+        st.success(f"✅ 訂單 {so_no} 儲存成功！")
+        st.session_state.current_so_target = "(建立新訂單)"
+        st.session_state.so_form_data = get_empty_form()
+        time.sleep(1)
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"存檔失敗: {e}")
+
+def sync_matrix(supabase, p_code):
+    all_payments = supabase.table("so_payments").select("expected_date, amount, sales_orders!inner(project_code)").eq("sales_orders.project_code", p_code).execute()
+    monthly_revenue = {}
+    if all_payments.data:
+        for p in all_payments.data:
+            d_obj = datetime.strptime(p['expected_date'], "%Y-%m-%d")
+            month_key = d_obj.replace(day=1).strftime("%Y-%m-%d")
+            monthly_revenue[month_key] = monthly_revenue.get(month_key, 0) + p['amount']
+    
+    for m_key, amt in monthly_revenue.items():
+        exist = supabase.table("project_matrix").select("plan_amount").eq("project_code", p_code).eq("year_month", m_key).eq("cost_item", "2.1 產品銷售收入").execute()
+        current_plan = exist.data[0]['plan_amount'] if exist.data else 0
+        supabase.table("project_matrix").upsert(
+            {"project_code": p_code, "year_month": m_key, "cost_item": "2.1 產品銷售收入", "plan_amount": current_plan, "real_amount": amt},
+            on_conflict="project_code, year_month, cost_item"
+        ).execute()
+
+def render_order_list(supabase):
+    try:
+        res_so = supabase.table("sales_orders").select("so_number, order_date, total_amount, status, project_code, partners(name)").order("order_date", desc=True).execute()
+        if res_so.data:
+            for so in res_so.data:
+                with st.container(border=True):
+                    c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
+                    c1.markdown(f"**{so['so_number']}**")
+                    cust = so['partners']['name'] if so['partners'] else "Unknown"
+                    c1.caption(f"{so['project_code']} | {cust}")
+                    c2.markdown(f"${so['total_amount']:,.0f}")
+                    c3.write(so['status'])
+                    if c4.button("🗑️", key=f"del_{so['so_number']}"):
+                        supabase.table("sales_orders").delete().eq("so_number", so['so_number']).execute()
+                        sync_matrix(supabase, so['project_code']) 
+                        st.toast("已刪除")
+                        time.sleep(1)
+                        st.rerun()
+        else:
+            st.info("尚無訂單")
+    except: pass
