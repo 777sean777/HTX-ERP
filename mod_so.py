@@ -15,8 +15,7 @@ def show(supabase):
         st.error("無法讀取專案資料")
         return
 
-    # --- 2. 初始化 Session State (避開名稱衝突) ---
-    # ★★★ 修正點：改名為 so_form_data，避免跟 st.form("so_form") 撞名 ★★★
+    # --- 2. 初始化 Session State ---
     if "so_form_data" not in st.session_state:
         st.session_state.so_form_data = {
             "so_no": "",
@@ -28,24 +27,21 @@ def show(supabase):
             ])
         }
 
-    # --- 憲法第貳條：Dev Mode 一鍵填充 ---
+    # --- Dev Mode 一鍵填充 ---
     if st.session_state.get("dev_mode", False):
         with st.sidebar:
             st.markdown("### 🛠️ SO 開發工具")
             if st.button("🚀 填入測試訂單 (Test Data)"):
-                # 模擬一筆 100 萬的訂單
                 mock_items = pd.DataFrame([
                     {"品項名稱": "高機能透氣布料-A級", "規格": "Roll-200M", "數量": 100, "單價": 5000},
                     {"品項名稱": "防水塗層加工", "規格": "Batch-01", "數量": 100, "單價": 1000}
                 ])
-                # 總額 600,000
                 mock_payments = pd.DataFrame([
                     {"期數名稱": "訂金 30%", "預計收款日": date(2026, 2, 15), "金額": 180000},
                     {"期數名稱": "出貨款 60%", "預計收款日": date(2026, 3, 15), "金額": 360000},
                     {"期數名稱": "驗收尾款 10%", "預計收款日": date(2026, 4, 15), "金額": 60000}
                 ])
                 
-                # 更新 State
                 st.session_state.so_form_data = {
                     "so_no": "SO-20260115-001",
                     "contract_no": "CT-2026-A01",
@@ -56,14 +52,11 @@ def show(supabase):
                 time.sleep(0.5)
                 st.rerun()
 
-    # 讀取當前資料
     form_data = st.session_state.so_form_data
 
     # --- 3. 訂單輸入表單 ---
     with st.expander("➕ 新增銷售訂單 (SO)", expanded=True):
-        # ★★★ 這裡 form 的 key 維持 "so_main_form" ★★★
         with st.form("so_main_form"):
-            # A. 表頭資料
             st.markdown("#### 1. 訂單表頭 (Header)")
             c1, c2 = st.columns(2)
             
@@ -88,20 +81,18 @@ def show(supabase):
             order_date = c5.date_input("訂單日期")
             tax_type = c6.selectbox("稅別", ["含稅", "未稅", "零稅"])
 
-            # B. 產品明細 (動態)
             st.markdown("#### 2. 產品明細 (Line Items)")
             edited_items = st.data_editor(
                 form_data["items"],
                 num_rows="dynamic",
                 use_container_width=True,
-                key="editor_items", # 加上 key 避免重繪丟失
+                key="editor_items",
                 column_config={
                     "數量": st.column_config.NumberColumn(min_value=1),
                     "單價": st.column_config.NumberColumn(min_value=0, format="$%d")
                 }
             )
             
-            # 即時計算訂單總額
             temp_total = 0
             if not edited_items.empty:
                 try:
@@ -111,7 +102,6 @@ def show(supabase):
             
             st.caption(f"試算總金額: ${temp_total:,.0f}")
 
-            # C. 收款計畫 (Payment Schedule)
             st.markdown("#### 3. 收款計畫 (Payment Schedule)")
             st.info("💡 此處的「預計收款月份」將自動寫入專案矩陣的【實際收入 (Real)】欄位。")
             
@@ -119,14 +109,13 @@ def show(supabase):
                 form_data["payments"],
                 num_rows="dynamic",
                 use_container_width=True,
-                key="editor_payments", # 加上 key
+                key="editor_payments",
                 column_config={
                     "預計收款日": st.column_config.DateColumn(format="YYYY-MM-DD", required=True),
                     "金額": st.column_config.NumberColumn(format="$%d", required=True)
                 }
             )
 
-            # D. 存檔按鈕
             submitted = st.form_submit_button("💾 簽核並儲存訂單")
 
             if submitted:
@@ -183,7 +172,7 @@ def show(supabase):
                         supabase.table("so_payments").delete().eq("so_number", so_no).execute()
                         if payments_data: supabase.table("so_payments").insert(payments_data).execute()
 
-                        # 3. 連動矩陣 (Sync Matrix)
+                        # 3. ★★★ 連動矩陣 (Sync Matrix) ★★★
                         all_payments = supabase.table("so_payments")\
                             .select("expected_date, amount, sales_orders!inner(project_code)")\
                             .eq("sales_orders.project_code", p_code)\
@@ -197,6 +186,7 @@ def show(supabase):
                                 monthly_revenue[month_key] = monthly_revenue.get(month_key, 0) + p['amount']
                         
                         for m_key, amt in monthly_revenue.items():
+                            # 先讀 Plan
                             exist = supabase.table("project_matrix").select("plan_amount")\
                                 .eq("project_code", p_code)\
                                 .eq("year_month", m_key)\
@@ -204,16 +194,19 @@ def show(supabase):
                                 .execute()
                             current_plan = exist.data[0]['plan_amount'] if exist.data else 0
                             
-                            supabase.table("project_matrix").upsert({
-                                "project_code": p_code,
-                                "year_month": m_key,
-                                "cost_item": "2.1 產品銷售收入",
-                                "plan_amount": current_plan,
-                                "real_amount": amt
-                            }).execute()
+                            # ★★★ 關鍵修正：加上 on_conflict 參數 ★★★
+                            supabase.table("project_matrix").upsert(
+                                {
+                                    "project_code": p_code,
+                                    "year_month": m_key,
+                                    "cost_item": "2.1 產品銷售收入",
+                                    "plan_amount": current_plan,
+                                    "real_amount": amt
+                                },
+                                on_conflict="project_code, year_month, cost_item" # <--- 這裡救了我們
+                            ).execute()
 
                         st.success(f"✅ 訂單 {so_no} 已成立，並同步更新財務矩陣！")
-                        # 清空 Session State
                         del st.session_state.so_form_data
                         time.sleep(1)
                         st.rerun()
