@@ -14,7 +14,7 @@ def show(supabase):
         proj_options = [f"{p['project_code']} | {p['project_name']}" for p in res_proj.data]
 
         # 抓現有訂單 (用於編輯選單)
-        res_orders = supabase.table("sales_orders").select("so_number, project_code").order("created_at", desc=True).execute()
+        res_orders = supabase.table("sales_orders").select("so_number").order("created_at", desc=True).execute()
         existing_orders = [o['so_number'] for o in res_orders.data]
     except Exception as e:
         st.error(f"資料讀取失敗: {e}")
@@ -25,7 +25,6 @@ def show(supabase):
     target_so = c_sel.selectbox("✏️ 選擇要編輯的訂單 (或選擇建立新訂單)", ["(建立新訂單)"] + existing_orders)
 
     # --- 3. 初始化或載入資料邏輯 ---
-    # 如果 Session State 不存在，或者使用者切換了訂單，我們就需要重置/載入資料
     if "current_so_target" not in st.session_state:
         st.session_state.current_so_target = "(建立新訂單)"
         st.session_state.so_form_data = get_empty_form()
@@ -37,7 +36,6 @@ def show(supabase):
             st.session_state.so_form_data = get_empty_form()
             st.toast("已切換至新訂單模式")
         else:
-            # ★★★ 載入舊資料的核心邏輯 ★★★
             load_order_data(supabase, target_so)
             st.toast(f"已載入訂單 {target_so}")
 
@@ -52,11 +50,9 @@ def show(supabase):
             st.markdown("#### 1. 訂單表頭 (Header)")
             c1, c2 = st.columns(2)
             
-            # 專案選擇 (需要處理預設值)
-            # 嘗試從 form_data["project_code"] 找到對應的 index
+            # 處理專案選擇預設值
             default_proj_idx = 0
             if form_data["project_code"]:
-                # 模糊比對找到對應的選項
                 for idx, opt in enumerate(proj_options):
                     if opt.startswith(form_data["project_code"]):
                         default_proj_idx = idx
@@ -64,7 +60,6 @@ def show(supabase):
             
             selected_proj_label = c1.selectbox("選擇專案", [""] + proj_options, index=default_proj_idx + 1 if form_data["project_code"] else 0)
             
-            # 自動帶入客戶
             cust_display = ""
             p_code = ""
             cust_id = None
@@ -79,18 +74,19 @@ def show(supabase):
             c2.text_input("客戶 (自動帶入)", value=cust_display, disabled=True)
 
             c3, c4, c5, c6 = st.columns(4)
-            # 如果是編輯模式，訂單編號不能改 (或是改了變成另存新檔)
             so_no = c3.text_input("訂單編號", value=form_data["so_no"], disabled=(target_so != "(建立新訂單)"))
             contract_no = c4.text_input("合約編號", value=form_data["contract_no"])
             
             # 日期處理
             try:
-                def_date = datetime.strptime(str(form_data["order_date"]), "%Y-%m-%d").date()
+                if isinstance(form_data["order_date"], str):
+                    def_date = datetime.strptime(form_data["order_date"], "%Y-%m-%d").date()
+                else:
+                    def_date = form_data["order_date"]
             except:
                 def_date = date.today()
             order_date = c5.date_input("訂單日期", value=def_date)
             
-            # 稅別處理
             tax_opts = ["含稅", "未稅", "零稅"]
             tax_idx = tax_opts.index(form_data["tax_type"]) if form_data["tax_type"] in tax_opts else 0
             tax_type = c6.selectbox("稅別", tax_opts, index=tax_idx)
@@ -101,7 +97,7 @@ def show(supabase):
                 form_data["items"],
                 num_rows="dynamic",
                 use_container_width=True,
-                key=f"editor_items_{target_so}", # Unique key per order
+                key=f"editor_items_{target_so}",
                 column_config={
                     "數量": st.column_config.NumberColumn(min_value=1),
                     "單價": st.column_config.NumberColumn(min_value=0, format="$%d")
@@ -120,8 +116,15 @@ def show(supabase):
             st.markdown("#### 3. 收款計畫 (Payment Schedule)")
             st.info("💡 將寫入專案矩陣【實際收入 (Real)】。")
             
+            # ★★★ 關鍵防呆：確保日期格式正確 ★★★
+            # 如果是從 Session State 拿出來的，確保它是 DataFrame 並且日期欄位是 Date Object
+            df_payments_display = form_data["payments"].copy()
+            if not df_payments_display.empty and "預計收款日" in df_payments_display.columns:
+                # 強制轉換為 datetime.date 物件，避免 String 導致報錯
+                df_payments_display["預計收款日"] = pd.to_datetime(df_payments_display["預計收款日"]).dt.date
+
             edited_payments = st.data_editor(
-                form_data["payments"],
+                df_payments_display,
                 num_rows="dynamic",
                 use_container_width=True,
                 key=f"editor_payments_{target_so}",
@@ -138,13 +141,13 @@ def show(supabase):
             if submitted:
                 save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_type, edited_items, edited_payments)
 
-    # --- 5. 列表檢視 (簡易版) ---
+    # --- 5. 列表檢視 ---
     st.divider()
     if target_so == "(建立新訂單)":
         st.subheader("📋 所有訂單列表")
         render_order_list(supabase)
 
-# === Helper Functions (讓主程式乾淨點) ===
+# === Helper Functions ===
 
 def get_empty_form():
     return {
@@ -155,19 +158,19 @@ def get_empty_form():
 
 def load_order_data(supabase, so_no):
     try:
-        # 1. Header
         head = supabase.table("sales_orders").select("*").eq("so_number", so_no).single().execute().data
         
-        # 2. Items
         items = supabase.table("so_items").select("product_name, spec, quantity, unit_price").eq("so_number", so_no).execute().data
         df_items = pd.DataFrame(items) if items else pd.DataFrame([{"品項名稱": "", "規格": "", "數量": 1, "單價": 0}])
-        # Rename columns to match display
         df_items = df_items.rename(columns={"product_name": "品項名稱", "spec": "規格", "quantity": "數量", "unit_price": "單價"})
 
-        # 3. Payments
         pays = supabase.table("so_payments").select("term_name, expected_date, amount").eq("so_number", so_no).execute().data
         df_pays = pd.DataFrame(pays) if pays else pd.DataFrame([{"期數名稱": "", "預計收款日": date.today(), "金額": 0}])
         df_pays = df_pays.rename(columns={"term_name": "期數名稱", "expected_date": "預計收款日", "amount": "金額"})
+        
+        # ★★★ 關鍵修正：載入時將字串轉為 Date 物件 ★★★
+        if not df_pays.empty and "預計收款日" in df_pays.columns:
+            df_pays["預計收款日"] = pd.to_datetime(df_pays["預計收款日"]).dt.date
 
         st.session_state.so_form_data = {
             "so_no": head["so_number"],
@@ -187,7 +190,6 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
         return
 
     try:
-        # 1. 處理 Item 數據
         final_total = 0
         items_data = []
         if not items_df.empty:
@@ -202,7 +204,6 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
                         "quantity": qty, "unit_price": price, "amount": amt
                     })
 
-        # 2. 處理 Payment 數據
         payments_data = []
         if not pays_df.empty:
             for _, row in pays_df.iterrows():
@@ -212,7 +213,7 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
                         "expected_date": str(row["預計收款日"]), "amount": float(row["金額"])
                     })
 
-        # 3. 寫入 DB
+        # 寫入 DB
         so_header = {
             "so_number": so_no, "project_code": p_code, "cust_id": cust_id,
             "contract_no": contract_no, "order_date": str(order_date),
@@ -226,12 +227,9 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
         supabase.table("so_payments").delete().eq("so_number", so_no).execute()
         if payments_data: supabase.table("so_payments").insert(payments_data).execute()
 
-        # 4. 連動矩陣
         sync_matrix(supabase, p_code)
 
         st.success(f"✅ 訂單 {so_no} 儲存成功！")
-        
-        # 重置為新建模式
         st.session_state.current_so_target = "(建立新訂單)"
         st.session_state.so_form_data = get_empty_form()
         time.sleep(1)
@@ -241,7 +239,6 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
         st.error(f"存檔失敗: {e}")
 
 def sync_matrix(supabase, p_code):
-    # 讀取該專案所有 SO Payment
     all_payments = supabase.table("so_payments").select("expected_date, amount, sales_orders!inner(project_code)").eq("sales_orders.project_code", p_code).execute()
     
     monthly_revenue = {}
@@ -252,7 +249,6 @@ def sync_matrix(supabase, p_code):
             monthly_revenue[month_key] = monthly_revenue.get(month_key, 0) + p['amount']
     
     for m_key, amt in monthly_revenue.items():
-        # 先讀 Plan
         exist = supabase.table("project_matrix").select("plan_amount").eq("project_code", p_code).eq("year_month", m_key).eq("cost_item", "2.1 產品銷售收入").execute()
         current_plan = exist.data[0]['plan_amount'] if exist.data else 0
         
@@ -278,7 +274,6 @@ def render_order_list(supabase):
                     c3.write(so['status'])
                     if c4.button("🗑️", key=f"del_{so['so_number']}"):
                         supabase.table("sales_orders").delete().eq("so_number", so['so_number']).execute()
-                        # 刪除後也要觸發一次矩陣同步，扣掉金額
                         sync_matrix(supabase, so['project_code']) 
                         st.toast("已刪除")
                         time.sleep(1)
