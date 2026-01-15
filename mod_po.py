@@ -360,4 +360,10 @@ def generate_excel_po(po_data, supp_data):
     ws.write(last_row, 4, po_data['total_amount'], fmt_currency)
     
     ws.write(last_row + 3, 0, "核准 (Approved By):", fmt_header)
-    ws.write(last_row +
+    ws.write(last_row + 3, 3, "經辦 (Prepared By):", fmt_header)
+    
+    ws.write(last_row + 5, 0, "_"*30)
+    ws.write(last_row + 5, 3, "_"*30)
+    
+    workbook.close()
+    return output.getvalue()
