@@ -6,7 +6,7 @@ from datetime import datetime, date
 def show(supabase):
     st.markdown('<p class="main-header">📝 銷售訂單管理 (Sales Order)</p>', unsafe_allow_html=True)
 
-    # --- 1. 準備專案與訂單資料 ---
+    # --- 1. 準備資料 ---
     try:
         res_proj = supabase.table("projects").select("project_code, project_name, cust_id, partners(name)").execute()
         proj_map = {p['project_code']: p for p in res_proj.data}
@@ -18,11 +18,11 @@ def show(supabase):
         st.error(f"資料讀取失敗: {e}")
         return
 
-    # --- 2. 編輯/新增 切換器 ---
+    # --- 2. 編輯/新增 切換 ---
     c_sel, c_btn = st.columns([3, 1])
     target_so = c_sel.selectbox("✏️ 選擇要編輯的訂單 (或選擇建立新訂單)", ["(建立新訂單)"] + existing_orders)
 
-    # --- 3. 初始化或載入資料邏輯 ---
+    # --- 3. 初始化 ---
     if "current_so_target" not in st.session_state:
         st.session_state.current_so_target = "(建立新訂單)"
         st.session_state.so_form_data = get_empty_form()
@@ -38,7 +38,7 @@ def show(supabase):
 
     form_data = st.session_state.so_form_data
 
-    # --- 4. 訂單表單 (Form) ---
+    # --- 4. 表單區域 ---
     with st.container(border=True):
         st.subheader("📋 訂單詳細內容")
         
@@ -59,14 +59,12 @@ def show(supabase):
             cust_display = ""
             p_code = ""
             cust_id = None
-            
             if selected_proj_label:
                 p_code = selected_proj_label.split(" | ")[0]
                 proj_data = proj_map.get(p_code)
                 if proj_data and proj_data.get('partners'):
                     cust_display = proj_data['partners']['name']
                     cust_id = proj_data['cust_id']
-            
             c2.text_input("客戶 (自動帶入)", value=cust_display, disabled=True)
 
             c3, c4, c5, c6 = st.columns(4)
@@ -76,50 +74,76 @@ def show(supabase):
             try:
                 if isinstance(form_data["order_date"], str):
                     def_date = datetime.strptime(form_data["order_date"], "%Y-%m-%d").date()
-                else:
-                    def_date = form_data["order_date"]
-            except:
-                def_date = date.today()
+                else: def_date = form_data["order_date"]
+            except: def_date = date.today()
             order_date = c5.date_input("訂單日期", value=def_date)
             
             tax_opts = ["含稅", "未稅", "零稅"]
             tax_idx = tax_opts.index(form_data["tax_type"]) if form_data["tax_type"] in tax_opts else 0
             tax_type = c6.selectbox("稅別", tax_opts, index=tax_idx)
 
-            # B. 產品明細
+            # B. 產品明細 (核心修改處)
             st.markdown("#### 2. 產品明細 (Line Items)")
+            st.caption("請在下方輸入數量與單價，系統將自動計算小計。")
+            
+            # 使用 Data Editor 讓用戶輸入
             edited_items = st.data_editor(
                 form_data["items"],
                 num_rows="dynamic",
                 use_container_width=True,
                 key=f"editor_items_{target_so}",
                 column_config={
-                    "數量": st.column_config.NumberColumn(min_value=1),
-                    "單價": st.column_config.NumberColumn(min_value=0, format="$%d")
+                    "數量": st.column_config.NumberColumn(min_value=1, required=True),
+                    "單價": st.column_config.NumberColumn(min_value=0, format="$%d", required=True)
                 }
             )
             
-            # 計算訂單總額 (Header Total)
+            # ★★★ 即時運算邏輯 ★★★
+            # 只要上面的 data_editor 有變動 (按 Enter)，程式會重跑，這裡就會重新計算
             header_total = 0
-            if not edited_items.empty:
-                try:
-                    edited_items["小計"] = edited_items["數量"].astype(float) * edited_items["單價"].astype(float)
-                    header_total = edited_items["小計"].sum()
-                except: pass
+            display_df = pd.DataFrame()
             
-            # 顯示訂單總額 (大字)
-            st.metric("訂單總金額 (Order Total)", f"${header_total:,.0f}")
+            if not edited_items.empty:
+                # 複製一份來做計算，以免汙染原始輸入
+                calc_df = edited_items.copy()
+                try:
+                    # 強制轉型防呆
+                    calc_df["數量"] = pd.to_numeric(calc_df["數量"], errors='coerce').fillna(0)
+                    calc_df["單價"] = pd.to_numeric(calc_df["單價"], errors='coerce').fillna(0)
+                    
+                    # 計算小計
+                    calc_df["金額 (小計)"] = calc_df["數量"] * calc_df["單價"]
+                    
+                    # 計算總額
+                    header_total = calc_df["金額 (小計)"].sum()
+                    
+                    # 準備顯示用的表格 (加上小計欄位)
+                    display_df = calc_df
+                except:
+                    pass
+
+            # 顯示「試算結果表」 (這是唯讀的，讓用戶確認金額)
+            if not display_df.empty:
+                st.markdown("⬇️ **明細試算預覽 (自動計算)**")
+                st.dataframe(
+                    display_df, 
+                    use_container_width=True,
+                    column_config={
+                        "金額 (小計)": st.column_config.NumberColumn(format="$%d", help="數量 * 單價")
+                    }
+                )
+
+            # 顯示超大總金額
+            st.metric("💰 訂單總金額 (Total Amount)", f"${header_total:,.0f}")
 
             # C. 收款計畫
             st.markdown("#### 3. 收款計畫 (Payment Schedule)")
-            
-            # 日期防呆
-            df_payments_display = form_data["payments"].copy()
-            if not df_payments_display.empty and "預計收款日" in df_payments_display.columns:
-                df_payments_display["預計收款日"] = pd.to_datetime(df_payments_display["預計收款日"]).dt.date
+            df_pay = form_data["payments"].copy()
+            if not df_pay.empty and "預計收款日" in df_pay.columns:
+                df_pay["預計收款日"] = pd.to_datetime(df_pay["預計收款日"]).dt.date
 
             edited_payments = st.data_editor(
-                df_payments_display,
+                df_pay,
                 num_rows="dynamic",
                 use_container_width=True,
                 key=f"editor_payments_{target_so}",
@@ -129,48 +153,43 @@ def show(supabase):
                 }
             )
             
-            # ★★★ 核心檢核邏輯 ★★★
+            # 檢核邏輯
             payment_total = 0
             if not edited_payments.empty:
-                try:
-                    payment_total = edited_payments["金額"].sum()
+                try: payment_total = edited_payments["金額"].sum()
                 except: pass
             
             diff = header_total - payment_total
-            
-            # 顯示檢核結果
-            # 如果有差額，顯示紅色警告；如果平了，顯示綠色成功
             is_valid = (diff == 0) and (header_total > 0)
             
             if is_valid:
                 st.success(f"✅ 金額檢核通過：收款總額 ${payment_total:,.0f} 與訂單總額相符。")
             else:
                 if header_total == 0:
-                    st.warning("⚠️ 請先輸入產品明細與金額。")
+                    st.warning("⚠️ 請先輸入產品明細。")
                 else:
                     st.error(f"❌ 金額不符！訂單總額 ${header_total:,.0f} vs 收款總額 ${payment_total:,.0f} (差額: ${diff:,.0f})")
-                    st.caption("請調整「收款計畫」金額，直到差額為 0 才能存檔。")
 
-            # D. 存檔 (依據 is_valid 決定是否啟用)
+            # D. 存檔
             btn_label = "💾 更新訂單" if target_so != "(建立新訂單)" else "💾 建立新訂單"
-            
-            # 使用 form_submit_button，但如果檢核不過，我們在按下後的邏輯裡擋住
             submitted = st.form_submit_button(btn_label)
 
             if submitted:
                 if not is_valid:
                     st.error("⛔ 無法存檔：請先修正金額差異！")
+                elif not so_no or not p_code:
+                    st.error("訂單編號與專案為必填")
                 else:
+                    # 存檔時使用有小計的 items 邏輯嗎？不，資料庫通常不存小計 (冗餘欄位)，只存單價數量
                     save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_type, edited_items, edited_payments)
 
-    # --- 5. 列表檢視 ---
+    # --- 5. 列表 ---
     st.divider()
     if target_so == "(建立新訂單)":
         st.subheader("📋 所有訂單列表")
         render_order_list(supabase)
 
-# === Helper Functions ===
-
+# === Helpers ===
 def get_empty_form():
     return {
         "so_no": "", "project_code": "", "contract_no": "", "order_date": date.today(), "tax_type": "含稅",
@@ -194,14 +213,9 @@ def load_order_data(supabase, so_no):
             "so_no": head["so_number"], "project_code": head["project_code"], "contract_no": head["contract_no"],
             "order_date": head["order_date"], "tax_type": head["tax_type"], "items": df_items, "payments": df_pays
         }
-    except Exception as e:
-        st.error(f"載入失敗: {e}")
+    except Exception as e: st.error(f"載入失敗: {e}")
 
 def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_type, items_df, pays_df):
-    if not so_no or not p_code:
-        st.error("❌ 訂單編號與專案代號為必填！")
-        return
-
     try:
         final_total = 0
         items_data = []
@@ -232,10 +246,8 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
             "tax_type": tax_type, "total_amount": final_total, "status": "Confirmed"
         }
         supabase.table("sales_orders").upsert(so_header).execute()
-
         supabase.table("so_items").delete().eq("so_number", so_no).execute()
         if items_data: supabase.table("so_items").insert(items_data).execute()
-
         supabase.table("so_payments").delete().eq("so_number", so_no).execute()
         if payments_data: supabase.table("so_payments").insert(payments_data).execute()
 
@@ -246,9 +258,7 @@ def save_order(supabase, so_no, p_code, cust_id, contract_no, order_date, tax_ty
         st.session_state.so_form_data = get_empty_form()
         time.sleep(1)
         st.rerun()
-
-    except Exception as e:
-        st.error(f"存檔失敗: {e}")
+    except Exception as e: st.error(f"存檔失敗: {e}")
 
 def sync_matrix(supabase, p_code):
     all_payments = supabase.table("so_payments").select("expected_date, amount, sales_orders!inner(project_code)").eq("sales_orders.project_code", p_code).execute()
@@ -285,6 +295,5 @@ def render_order_list(supabase):
                         st.toast("已刪除")
                         time.sleep(1)
                         st.rerun()
-        else:
-            st.info("尚無訂單")
+        else: st.info("尚無訂單")
     except: pass
