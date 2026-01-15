@@ -15,9 +15,10 @@ def show(supabase):
         st.error("無法讀取專案資料")
         return
 
-    # --- 2. 初始化 Session State (表單狀態) ---
-    if "so_form" not in st.session_state:
-        st.session_state.so_form = {
+    # --- 2. 初始化 Session State (避開名稱衝突) ---
+    # ★★★ 修正點：改名為 so_form_data，避免跟 st.form("so_form") 撞名 ★★★
+    if "so_form_data" not in st.session_state:
+        st.session_state.so_form_data = {
             "so_no": "",
             "contract_no": "",
             "items": pd.DataFrame([{"品項名稱": "", "規格": "", "數量": 1, "單價": 0}]),
@@ -44,7 +45,8 @@ def show(supabase):
                     {"期數名稱": "驗收尾款 10%", "預計收款日": date(2026, 4, 15), "金額": 60000}
                 ])
                 
-                st.session_state.so_form = {
+                # 更新 State
+                st.session_state.so_form_data = {
                     "so_no": "SO-20260115-001",
                     "contract_no": "CT-2026-A01",
                     "items": mock_items,
@@ -54,11 +56,13 @@ def show(supabase):
                 time.sleep(0.5)
                 st.rerun()
 
-    form_data = st.session_state.so_form
+    # 讀取當前資料
+    form_data = st.session_state.so_form_data
 
     # --- 3. 訂單輸入表單 ---
     with st.expander("➕ 新增銷售訂單 (SO)", expanded=True):
-        with st.form("so_form"):
+        # ★★★ 這裡 form 的 key 維持 "so_main_form" ★★★
+        with st.form("so_main_form"):
             # A. 表頭資料
             st.markdown("#### 1. 訂單表頭 (Header)")
             c1, c2 = st.columns(2)
@@ -90,6 +94,7 @@ def show(supabase):
                 form_data["items"],
                 num_rows="dynamic",
                 use_container_width=True,
+                key="editor_items", # 加上 key 避免重繪丟失
                 column_config={
                     "數量": st.column_config.NumberColumn(min_value=1),
                     "單價": st.column_config.NumberColumn(min_value=0, format="$%d")
@@ -99,7 +104,6 @@ def show(supabase):
             # 即時計算訂單總額
             temp_total = 0
             if not edited_items.empty:
-                # 簡單防呆轉型
                 try:
                     edited_items["小計"] = edited_items["數量"].astype(float) * edited_items["單價"].astype(float)
                     temp_total = edited_items["小計"].sum()
@@ -115,6 +119,7 @@ def show(supabase):
                 form_data["payments"],
                 num_rows="dynamic",
                 use_container_width=True,
+                key="editor_payments", # 加上 key
                 column_config={
                     "預計收款日": st.column_config.DateColumn(format="YYYY-MM-DD", required=True),
                     "金額": st.column_config.NumberColumn(format="$%d", required=True)
@@ -159,7 +164,7 @@ def show(supabase):
                                         "amount": float(row["金額"])
                                     })
 
-                        # 2. 寫入 DB (Header -> Items -> Payments)
+                        # 2. 寫入 DB
                         so_header = {
                             "so_number": so_no,
                             "project_code": p_code,
@@ -178,8 +183,7 @@ def show(supabase):
                         supabase.table("so_payments").delete().eq("so_number", so_no).execute()
                         if payments_data: supabase.table("so_payments").insert(payments_data).execute()
 
-                        # 3. ★★★ 觸發矩陣連動 (Sync Matrix) ★★★
-                        # 讀取該專案所有 SO Payment
+                        # 3. 連動矩陣 (Sync Matrix)
                         all_payments = supabase.table("so_payments")\
                             .select("expected_date, amount, sales_orders!inner(project_code)")\
                             .eq("sales_orders.project_code", p_code)\
@@ -192,9 +196,7 @@ def show(supabase):
                                 month_key = d_obj.replace(day=1).strftime("%Y-%m-%d")
                                 monthly_revenue[month_key] = monthly_revenue.get(month_key, 0) + p['amount']
                         
-                        # 寫入 Matrix (Real)
                         for m_key, amt in monthly_revenue.items():
-                            # 先讀取現有 Plan (避免覆蓋)
                             exist = supabase.table("project_matrix").select("plan_amount")\
                                 .eq("project_code", p_code)\
                                 .eq("year_month", m_key)\
@@ -202,7 +204,6 @@ def show(supabase):
                                 .execute()
                             current_plan = exist.data[0]['plan_amount'] if exist.data else 0
                             
-                            # Upsert
                             supabase.table("project_matrix").upsert({
                                 "project_code": p_code,
                                 "year_month": m_key,
@@ -212,15 +213,15 @@ def show(supabase):
                             }).execute()
 
                         st.success(f"✅ 訂單 {so_no} 已成立，並同步更新財務矩陣！")
-                        # 清空 Session State 以便下一筆
-                        del st.session_state.so_form
+                        # 清空 Session State
+                        del st.session_state.so_form_data
                         time.sleep(1)
                         st.rerun()
 
                     except Exception as e:
                         st.error(f"存檔失敗: {e}")
 
-    # --- 4. 訂單列表與刪除 ---
+    # --- 4. 訂單列表 ---
     st.divider()
     st.subheader("📋 訂單列表 (Sales Orders)")
     try:
