@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import io
-import os  # <--- 新增 OS 用來檢查圖片是否存在
+import os
 from datetime import datetime, date
 
 # --- 憲法 3.x 變動費用科目 ---
@@ -455,16 +455,11 @@ def generate_excel_po(po_data, my_company):
     comp_addr = my_company.get('address', '')
     comp_tel = my_company.get('phone', '')
     
-    # ★★★ Logo Embedding Logic ★★★
-    # Check if logo.png exists in the root directory
+    # Logo Embedding
     if os.path.exists("logo.png"):
-        # Insert image at A1 with a slight scale down
         ws.insert_image('A1', 'logo.png', {'x_scale': 0.5, 'y_scale': 0.5})
-        
-        # Adjust Title placement to avoid overlapping the logo
         ws.merge_range('C1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
     else:
-        # Fallback if no logo
         ws.merge_range('A1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
 
     ws.merge_range('A2:F2', f"{comp_name}\n地址: {comp_addr}\n電話: {comp_tel}", wb.add_format({'align': 'center', 'text_wrap': True}))
@@ -501,4 +496,95 @@ def generate_excel_po(po_data, my_company):
         ws.write(row, 5, item['amount'], f_num)
         row += 1
         
-    ws.write(row
+    ws.write(row, 4, "Total:", f_bold)
+    ws.write(row, 5, po_data['total_amount'], f_num)
+    
+    cpm = po_data.get('provided_materials', [])
+    if cpm:
+        row += 2
+        ws.merge_range(row, 0, row, 5, "附件：自備料清單 (Materials Provided by Buyer)", f_header)
+        row += 1
+        ws.write(row, 0, "Item Name", f_bold)
+        ws.write(row, 1, "Spec", f_bold)
+        ws.write(row, 2, "Qty", f_bold)
+        ws.write(row, 3, "Unit", f_bold)
+        ws.write(row, 4, "Remarks", f_bold)
+        row += 1
+        for m in cpm:
+            ws.write(row, 0, m['material_name'], f_box)
+            ws.write(row, 1, m['spec'], f_box)
+            ws.write(row, 2, m['quantity'], f_box)
+            ws.write(row, 3, m['unit'], f_box)
+            ws.write(row, 4, m['remarks'], f_box)
+            row += 1
+
+    row += 4
+    ws.merge_range(row, 0, row, 2, "Confirmed By (Supplier):", f_header)
+    ws.merge_range(row, 3, row, 5, "Approved By (Buyer):", f_header)
+    ws.merge_range(row+1, 0, row+3, 2, "", f_box)
+    ws.merge_range(row+1, 3, row+3, 5, "", f_box)
+
+    ws.set_column('A:A', 20)
+    ws.set_column('B:B', 25)
+    ws.set_column('C:E', 10)
+    ws.set_column('F:F', 15)
+    
+    workbook.close()
+    return output.getvalue()
+
+def generate_excel_delivery_note(po_data, my_company):
+    output = io.BytesIO()
+    workbook = pd.ExcelWriter(output, engine='xlsxwriter')
+    wb = workbook.book
+    pd.DataFrame().to_excel(workbook, sheet_name='DN', index=False)
+    ws = workbook.sheets['DN']
+    
+    f_title = wb.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
+    f_bold = wb.add_format({'bold': True, 'font_size': 12})
+    f_box = wb.add_format({'border': 1, 'text_wrap': True})
+    f_header = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1})
+    
+    # Logo for DN
+    if os.path.exists("logo.png"):
+        ws.insert_image('A1', 'logo.png', {'x_scale': 0.5, 'y_scale': 0.5})
+        ws.merge_range('C1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
+    else:
+        ws.merge_range('A1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
+
+    ws.merge_range('A2:E2', f"Ref PO No.: {po_data['po_number']}", wb.add_format({'align': 'center', 'font_size': 14, 'bold': True}))
+    
+    ws.write('A4', "To (Receiver):", f_bold)
+    supp = po_data.get('partners') or {}
+    ws.merge_range('B4:E4', f"{supp.get('name', po_data.get('supplier_name', 'Unknown'))}", f_box)
+    ws.write('A5', "From (Sender):", f_bold)
+    ws.merge_range('B5:E5', my_company.get('company_name_zh', 'HTX'), f_box)
+    
+    row = 7
+    headers = ["Item Name", "Spec", "Quantity", "Unit", "Remarks"]
+    for col, h in enumerate(headers):
+        ws.write(row, col, h, f_header)
+    
+    row += 1
+    for m in po_data.get('provided_materials', []):
+        ws.write(row, 0, m['material_name'], f_box)
+        ws.write(row, 1, m['spec'], f_box)
+        ws.write(row, 2, m['quantity'], f_box)
+        ws.write(row, 3, m['unit'], f_box)
+        ws.write(row, 4, m['remarks'], f_box)
+        row += 1
+        
+    row += 3
+    ws.merge_range(row, 0, row, 4, "聲明：收到上述物料無誤，本批物料僅供指定 PO 訂單加工使用，加工完成後餘料需退回。", wb.add_format({'italic': True}))
+    
+    row += 2
+    ws.write(row, 0, "Received By (Sign):", f_bold)
+    ws.merge_range(row, 1, row, 2, "", wb.add_format({'bottom': 1}))
+    ws.write(row, 3, "Date:", f_bold)
+    ws.write(row, 4, "", wb.add_format({'bottom': 1}))
+
+    ws.set_column('A:A', 20)
+    ws.set_column('B:B', 20)
+    ws.set_column('C:E', 15)
+
+    workbook.close()
+    return output.getvalue()
