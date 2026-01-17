@@ -142,27 +142,37 @@ def show(supabase):
             bill_to = lc2.text_area("發票地址 (Bill To)", value=form_data.get("bill_to_address", my_company.get("address", "")), height=70)
             contact = lc1.text_input("收貨聯絡人 (Contact)", value=form_data.get("receiver_contact", ""))
 
-
             # B. 採購明細
             st.markdown("#### 2. 採購明細 (Purchase Items)")
             st.caption("請輸入數量與單價，金額會自動計算。")
             
-            # 準備數據
-            df_items_display = form_data["items"].copy()
-            if not df_items_display.empty:
-                df_items_display["數量"] = pd.to_numeric(df_items_display["數量"], errors='coerce').fillna(0)
-                df_items_display["單價"] = pd.to_numeric(df_items_display["單價"], errors='coerce').fillna(0)
-                df_items_display["金額"] = df_items_display["數量"] * df_items_display["單價"]
+            # ★★★ 關鍵修復：自動同步 Session State 與 即時計算 ★★★
+            editor_key = f"po_items_{target_po}"
+            
+            # 1. 如果使用者剛剛編輯過，先抓最新的值進來 (Sync)
+            if editor_key in st.session_state:
+                form_data["items"] = st.session_state[editor_key]
 
+            # 2. 自動修復：如果缺「金額」欄位，補上它 (Fix Missing Column)
+            if "金額" not in form_data["items"].columns:
+                form_data["items"]["金額"] = 0
+
+            # 3. 強制計算：金額 = 數量 * 單價 (Calc)
+            if not form_data["items"].empty:
+                form_data["items"]["數量"] = pd.to_numeric(form_data["items"]["數量"], errors='coerce').fillna(0)
+                form_data["items"]["單價"] = pd.to_numeric(form_data["items"]["單價"], errors='coerce').fillna(0)
+                form_data["items"]["金額"] = form_data["items"]["數量"] * form_data["items"]["單價"]
+
+            # 4. 渲染表格
             edited_items = st.data_editor(
-                df_items_display, 
+                form_data["items"], 
                 num_rows="dynamic", 
                 use_container_width=True, 
-                key=f"po_items_{target_po}",
+                key=editor_key,
                 column_config={
                     "數量": st.column_config.NumberColumn(min_value=1, required=True), 
                     "單價": st.column_config.NumberColumn(min_value=0, required=True, format="$%d"),
-                    "金額": st.column_config.NumberColumn(format="$%d", disabled=True) 
+                    "金額": st.column_config.NumberColumn(format="$%d", disabled=True) # 禁止手改，強制自動算
                 }
             )
             
@@ -173,8 +183,7 @@ def show(supabase):
             
             if not edited_items.empty:
                 try:
-                    subtotals = edited_items["數量"] * edited_items["單價"]
-                    sum_val = subtotals.sum()
+                    sum_val = edited_items["金額"].sum()
                     if tax_type == "含稅":
                         final_total = sum_val
                         raw_total = sum_val / 1.05
@@ -194,16 +203,20 @@ def show(supabase):
             k2.metric("營業稅 (5%)", f"${tax_amount:,.0f}")
             k3.metric("總計 (含稅)", f"${final_total:,.0f}")
 
-
-            # C. 自備料明細 (CPM) - NEW
+            # C. 自備料明細
             st.markdown("#### 3. 自備料清單 (Provided Materials)")
-            st.caption("若此單為委外加工，請填寫我方提供之原料 (不計價)。")
+            st.caption("若此單為委外加工，請填寫我方提供之原料。")
             
+            # 同步 CPM 編輯狀態
+            cpm_key = f"po_cpm_{target_po}"
+            if cpm_key in st.session_state:
+                form_data["provided_materials"] = st.session_state[cpm_key]
+
             edited_cpm = st.data_editor(
                 form_data["provided_materials"],
                 num_rows="dynamic",
                 use_container_width=True,
-                key=f"po_cpm_{target_po}",
+                key=cpm_key,
                 column_config={
                     "自備料品項": st.column_config.TextColumn(required=True),
                     "預計提供數量": st.column_config.NumberColumn(min_value=0),
@@ -301,280 +314,8 @@ def show(supabase):
 
 # === Helpers ===
 def get_empty_form(my_company):
-    # 預設地址帶入公司設定
     return {
         "po_no": "", "project_code": "", "supplier_name": "", "cost_item": "3.1 原料採購成本",
         "order_date": date.today(), "tax_type": "含稅",
         "payment_terms": "月結 60 天", "trade_terms": "當地交貨 (Delivered)",
-        "ship_to_address": my_company.get("address", ""),
-        "bill_to_address": my_company.get("address", ""),
-        "receiver_contact": "",
-        "items": pd.DataFrame([{"品項": "", "規格": "", "數量": 1, "單價": 0, "金額": 0}]),
-        "provided_materials": pd.DataFrame([{"自備料品項": "", "規格": "", "預計提供數量": 0, "單位": "", "備註": ""}]),
-        "payments": pd.DataFrame([{"期數": "月結", "預計付款日": date.today(), "金額": 0}])
-    }
-
-def load_po_data(supabase, po_no):
-    try:
-        head = supabase.table("purchase_orders").select("*, partners(name)").eq("po_number", po_no).single().execute().data
-        items = supabase.table("po_items").select("product_name, spec, quantity, unit_price, amount").eq("po_number", po_no).execute().data
-        cpm = supabase.table("po_provided_materials").select("material_name, spec, quantity, unit, remarks").eq("po_number", po_no).execute().data
-        pays = supabase.table("po_payments").select("term_name, expected_date, amount").eq("po_number", po_no).execute().data
-        
-        df_items = pd.DataFrame(items).rename(columns={"product_name": "品項", "spec": "規格", "quantity": "數量", "unit_price": "單價", "amount": "金額"})
-        df_cpm = pd.DataFrame(cpm).rename(columns={"material_name": "自備料品項", "spec": "規格", "quantity": "預計提供數量", "unit": "單位", "remarks": "備註"})
-        if df_cpm.empty: df_cpm = pd.DataFrame([{"自備料品項": "", "規格": "", "預計提供數量": 0, "單位": "", "備註": ""}])
-
-        df_pays = pd.DataFrame(pays).rename(columns={"term_name": "期數", "expected_date": "預計付款日", "amount": "金額"})
-        if not df_pays.empty: df_pays["預計付款日"] = pd.to_datetime(df_pays["預計付款日"]).dt.date
-
-        st.session_state.po_form_data = {
-            "po_no": head["po_number"], "project_code": head["project_code"], 
-            "supplier_name": head["partners"]["name"], "cost_item": head["cost_item"],
-            "order_date": datetime.strptime(head["order_date"], "%Y-%m-%d").date(),
-            "tax_type": head["tax_type"], 
-            "payment_terms": head.get("payment_terms", ""), "trade_terms": head.get("trade_terms", ""),
-            "ship_to_address": head.get("ship_to_address", ""), "bill_to_address": head.get("bill_to_address", ""),
-            "receiver_contact": head.get("receiver_contact", ""),
-            "items": df_items, "provided_materials": df_cpm, "payments": df_pays
-        }
-    except Exception as e: st.error(f"載入失敗: {e}")
-
-def load_po_data_raw(supabase, po_no):
-    try:
-        head = supabase.table("purchase_orders").select("*, partners(*), project_code").eq("po_number", po_no).single().execute().data
-        head['items'] = supabase.table("po_items").select("*").eq("po_number", po_no).execute().data
-        head['provided_materials'] = supabase.table("po_provided_materials").select("*").eq("po_number", po_no).execute().data
-        return head
-    except: return None
-
-def save_po(supabase, data, items_df, cpm_df, pay_df):
-    try:
-        # Header
-        supabase.table("purchase_orders").upsert({
-            "po_number": data["po_no"], "project_code": data["p_code"], "supplier_id": data["supp_id"], 
-            "cost_item": data["cost_item"], "order_date": str(data["order_date"]), "tax_type": data["tax_type"], 
-            "total_amount": data["total"], "status": "Confirmed",
-            "payment_terms": data["payment_terms"], "trade_terms": data["trade_terms"],
-            "ship_to_address": data["ship_to"], "bill_to_address": data["bill_to"], "receiver_contact": data["contact"]
-        }).execute()
-        
-        # Items
-        supabase.table("po_items").delete().eq("po_number", data["po_no"]).execute()
-        items_list = []
-        for _, r in items_df.iterrows():
-            if r.get("品項"):
-                items_list.append({
-                    "po_number": data["po_no"], "product_name": r["品項"], "spec": r.get("規格"), 
-                    "quantity": float(r["數量"]), "unit_price": float(r["單價"]), "amount": float(r["數量"])*float(r["單價"])
-                })
-        if items_list: supabase.table("po_items").insert(items_list).execute()
-
-        # Provided Materials (CPM)
-        supabase.table("po_provided_materials").delete().eq("po_number", data["po_no"]).execute()
-        cpm_list = []
-        for _, r in cpm_df.iterrows():
-            if r.get("自備料品項"):
-                cpm_list.append({
-                    "po_number": data["po_no"], "material_name": r["自備料品項"], "spec": r.get("規格"),
-                    "quantity": float(r["預計提供數量"]), "unit": r.get("單位"), "remarks": r.get("備註")
-                })
-        if cpm_list: supabase.table("po_provided_materials").insert(cpm_list).execute()
-
-        # Payments
-        supabase.table("po_payments").delete().eq("po_number", data["po_no"]).execute()
-        pay_list = []
-        for _, r in pay_df.iterrows():
-            if r["金額"] > 0:
-                pay_list.append({"po_number": data["po_no"], "term_name": r.get("期數"), "expected_date": str(r["預計付款日"]), "amount": float(r["金額"])})
-        if pay_list: supabase.table("po_payments").insert(pay_list).execute()
-
-        sync_po_matrix(supabase, data["p_code"], data["cost_item"])
-        st.success("✅ 儲存成功！")
-        time.sleep(1)
-        st.rerun()
-    except Exception as e: st.error(f"存檔失敗: {e}")
-
-def sync_po_matrix(supabase, p_code, cost_item):
-    res = supabase.table("po_payments").select("expected_date, amount, purchase_orders!inner(project_code, cost_item)").eq("purchase_orders.project_code", p_code).eq("purchase_orders.cost_item", cost_item).execute()
-    monthly_cost = {}
-    if res.data:
-        for row in res.data:
-            d = datetime.strptime(row['expected_date'], "%Y-%m-%d")
-            m_key = d.replace(day=1).strftime("%Y-%m-%d")
-            monthly_cost[m_key] = monthly_cost.get(m_key, 0) + row['amount']
-    for m, amt in monthly_cost.items():
-        exist = supabase.table("project_matrix").select("plan_amount").eq("project_code", p_code).eq("year_month", m).eq("cost_item", cost_item).execute()
-        plan = exist.data[0]['plan_amount'] if exist.data else 0
-        supabase.table("project_matrix").upsert(
-            {"project_code": p_code, "year_month": m, "cost_item": cost_item, "plan_amount": plan, "real_amount": amt},
-            on_conflict="project_code, year_month, cost_item"
-        ).execute()
-
-def render_po_list(supabase):
-    try:
-        res = supabase.table("purchase_orders").select("po_number, total_amount, partners(name), project_code").order("created_at", desc=True).execute()
-        if res.data:
-            st.subheader("📋 採購列表")
-            for r in res.data:
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 2, 1])
-                    c1.markdown(f"**{r['po_number']}**")
-                    c1.caption(f"{r['partners']['name']} | {r['project_code']}")
-                    c2.markdown(f"${r['total_amount']:,.0f}")
-                    if c3.button("🗑️", key=f"del_{r['po_number']}"):
-                        supabase.table("purchase_orders").delete().eq("po_number", r['po_number']).execute()
-                        st.toast("已刪除")
-                        time.sleep(1)
-                        st.rerun()
-    except: pass
-
-# --- Excel Generators ---
-def generate_excel_po(po_data, my_company):
-    output = io.BytesIO()
-    workbook = pd.ExcelWriter(output, engine='xlsxwriter')
-    wb = workbook.book
-    
-    # 建立一個隱藏的 DataFrame 來佔位 (為了讓 xlsxwriter 有地方寫)
-    pd.DataFrame().to_excel(workbook, sheet_name='PO', index=False)
-    ws = workbook.sheets['PO']
-    
-    # 格式定義
-    f_title = wb.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
-    f_bold = wb.add_format({'bold': True, 'font_size': 10})
-    f_box = wb.add_format({'border': 1, 'text_wrap': True, 'valign': 'top', 'font_size': 10})
-    f_header = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1, 'align': 'center'})
-    f_num = wb.add_format({'border': 1, 'num_format': '#,##0'})
-    
-    # 1. Header (My Company Info)
-    comp_name = my_company.get('company_name_zh', 'HTX')
-    comp_addr = my_company.get('address', '')
-    comp_tel = my_company.get('phone', '')
-    
-    ws.merge_range('A1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
-    ws.merge_range('A2:F2', f"{comp_name}\n地址: {comp_addr}\n電話: {comp_tel}", wb.add_format({'align': 'center', 'text_wrap': True}))
-    
-    # 2. Info Block
-    ws.write('D4', "PO Number:", f_bold)
-    ws.write('E4', po_data['po_number'])
-    ws.write('D5', "Date:", f_bold)
-    ws.write('E5', po_data['order_date'])
-    ws.write('D6', "Project:", f_bold)
-    ws.write('E6', po_data['project_code'])
-    
-    # 3. Vendor vs Ship To
-    supp = po_data['partners']
-    ws.merge_range('A4:C4', "Vendor (供應商):", f_header)
-    ws.merge_range('A5:C8', f"{supp['name']}\n{supp.get('company_address','')}\nAttn: {supp.get('contact_person','')}\nTel: {supp.get('company_phone','')}", f_box)
-    
-    ws.merge_range('A10:C10', "Ship To (送貨地址):", f_header)
-    ws.merge_range('A11:C13', f"{po_data.get('ship_to_address','')}\nAttn: {po_data.get('receiver_contact','')}", f_box)
-    
-    ws.merge_range('D10:F10', "Terms (條款):", f_header)
-    ws.merge_range('D11:F13', f"Payment: {po_data.get('payment_terms','')}\nTrade: {po_data.get('trade_terms','')}\nTax: {po_data.get('tax_type','')}", f_box)
-
-    # 4. Items Table
-    row = 15
-    headers = ["Item", "Description (Spec)", "Qty", "Unit", "Unit Price", "Amount"]
-    for col, h in enumerate(headers):
-        ws.write(row, col, h, f_header)
-    
-    row += 1
-    for item in po_data['items']:
-        ws.write(row, 0, item['product_name'], f_box)
-        ws.write(row, 1, item['spec'], f_box)
-        ws.write(row, 2, item['quantity'], f_box)
-        ws.write(row, 3, "pcs", f_box) # Unit placeholder
-        ws.write(row, 4, item['unit_price'], f_num)
-        ws.write(row, 5, item['amount'], f_num)
-        row += 1
-        
-    # Total
-    ws.write(row, 4, "Total:", f_bold)
-    ws.write(row, 5, po_data['total_amount'], f_num)
-    
-    # 5. Provided Materials (Attachment)
-    cpm = po_data.get('provided_materials', [])
-    if cpm:
-        row += 2
-        ws.merge_range(row, 0, row, 5, "附件：自備料清單 (Materials Provided by Buyer)", f_header)
-        row += 1
-        ws.write(row, 0, "Item Name", f_bold)
-        ws.write(row, 1, "Spec", f_bold)
-        ws.write(row, 2, "Qty", f_bold)
-        ws.write(row, 3, "Unit", f_bold)
-        ws.write(row, 4, "Remarks", f_bold)
-        row += 1
-        for m in cpm:
-            ws.write(row, 0, m['material_name'], f_box)
-            ws.write(row, 1, m['spec'], f_box)
-            ws.write(row, 2, m['quantity'], f_box)
-            ws.write(row, 3, m['unit'], f_box)
-            ws.write(row, 4, m['remarks'], f_box)
-            row += 1
-
-    # 6. Signatures
-    row += 4
-    ws.merge_range(row, 0, row, 2, "Confirmed By (Supplier):", f_header)
-    ws.merge_range(row, 3, row, 5, "Approved By (Buyer):", f_header)
-    ws.merge_range(row+1, 0, row+3, 2, "", f_box)
-    ws.merge_range(row+1, 3, row+3, 5, "", f_box)
-
-    # Column Widths
-    ws.set_column('A:A', 20)
-    ws.set_column('B:B', 25)
-    ws.set_column('C:E', 10)
-    ws.set_column('F:F', 15)
-    
-    workbook.close()
-    return output.getvalue()
-
-def generate_excel_delivery_note(po_data, my_company):
-    output = io.BytesIO()
-    workbook = pd.ExcelWriter(output, engine='xlsxwriter')
-    wb = workbook.book
-    pd.DataFrame().to_excel(workbook, sheet_name='DN', index=False)
-    ws = workbook.sheets['DN']
-    
-    f_title = wb.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
-    f_bold = wb.add_format({'bold': True, 'font_size': 12})
-    f_box = wb.add_format({'border': 1, 'text_wrap': True})
-    f_header = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1})
-
-    ws.merge_range('A1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
-    ws.merge_range('A2:E2', f"Ref PO No.: {po_data['po_number']}", wb.add_format({'align': 'center', 'font_size': 14, 'bold': True}))
-    
-    ws.write('A4', "To (Receiver):", f_bold)
-    ws.merge_range('B4:E4', f"{po_data['partners']['name']}", f_box)
-    ws.write('A5', "From (Sender):", f_bold)
-    ws.merge_range('B5:E5', my_company.get('company_name_zh', 'HTX'), f_box)
-    
-    row = 7
-    headers = ["Item Name", "Spec", "Quantity", "Unit", "Remarks"]
-    for col, h in enumerate(headers):
-        ws.write(row, col, h, f_header)
-    
-    row += 1
-    for m in po_data.get('provided_materials', []):
-        ws.write(row, 0, m['material_name'], f_box)
-        ws.write(row, 1, m['spec'], f_box)
-        ws.write(row, 2, m['quantity'], f_box)
-        ws.write(row, 3, m['unit'], f_box)
-        ws.write(row, 4, m['remarks'], f_box)
-        row += 1
-        
-    row += 3
-    ws.merge_range(row, 0, row, 4, "聲明：收到上述物料無誤，本批物料僅供指定 PO 訂單加工使用，加工完成後餘料需退回。", wb.add_format({'italic': True}))
-    
-    row += 2
-    ws.write(row, 0, "Received By (Sign):", f_bold)
-    ws.merge_range(row, 1, row, 2, "", wb.add_format({'bottom': 1}))
-    ws.write(row, 3, "Date:", f_bold)
-    ws.write(row, 4, "", wb.add_format({'bottom': 1}))
-
-    ws.set_column('A:A', 20)
-    ws.set_column('B:B', 20)
-    ws.set_column('C:E', 15)
-
-    workbook.close()
-    return output.getvalue()
+        "ship_to_
