@@ -8,9 +8,9 @@ def show(supabase):
     try:
         # 只取第一筆，因為我們架構設計是單一公司實體
         res = supabase.table("company_settings").select("*").limit(1).execute()
-        current_data = res.data[0] if res_comp := res.data else {}
+        current_data = res.data[0] if res.data else {}
     except Exception as e:
-        st.error(f"讀取設定失敗: {e}")
+        st.error(f"讀取設定失敗，請確認資料庫是否已建立 company_settings 表格。錯誤: {e}")
         return
 
     # --- 2. 設定表單 ---
@@ -38,11 +38,7 @@ def show(supabase):
             
             if submitted:
                 try:
-                    # 更新資料庫
-                    # 如果原本是空的 (還沒執行過 SQL insert)，這裡會變成 Insert
-                    # 如果有資料，就是 Update
-                    # 為了保險，我們檢查 id，若無則 insert
-                    
+                    # 準備寫入的資料
                     payload = {
                         "company_name_zh": name_zh,
                         "company_name_en": name_en,
@@ -54,10 +50,10 @@ def show(supabase):
                     }
 
                     if current_data.get("id"):
-                        # Update
+                        # 如果已有資料，執行 Update
                         supabase.table("company_settings").update(payload).eq("id", current_data["id"]).execute()
                     else:
-                        # Insert (第一筆)
+                        # 如果是第一次設定，執行 Insert
                         supabase.table("company_settings").insert(payload).execute()
 
                     st.success("✅ 設定已更新！單據輸出將立即生效。")
