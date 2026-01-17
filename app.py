@@ -2,7 +2,7 @@ import streamlit as st
 import core_engine
 
 # --- 系統版本 ---
-VERSION = "V2026.01.15-Build02-Full" 
+VERSION = "V2026.01.17-System-Ready" 
 st.set_page_config(page_title=f"HTX ERP {VERSION}", layout="wide")
 
 # --- 初始化核心 ---
@@ -32,9 +32,10 @@ menu = {
     "project": "🚀 專案身分建檔",
     "matrix": "📅 專案36個月預算",
     "so": "📝 銷售訂單 (SO)", 
-    "po": "🛒 採購訂單 (PO)", # [New] 採購訂單
-    "inventory": "📦 倉儲與庫存",
-    "finance": "📊 經營決策看板"
+    "po": "🛒 採購訂單 (PO)",
+    "inventory": "📦 倉儲與庫存", # (雖然還沒實作，先留著位子)
+    "finance": "📊 經營決策看板",
+    "admin": "⚙️ 系統設定"  # <--- [NEW] 系統設定已掛載
 }
 choice_label = st.sidebar.radio("功能導航", list(menu.values()))
 
@@ -72,16 +73,21 @@ try:
         mod_so.show(supabase)
 
     elif choice == "po":
-        # 🟢 掛載採購模組
         import mod_po
         mod_po.show(supabase)
 
     elif choice == "inventory":
-        st.info("🚧 倉儲模組開發中... 請依照憲法進度開發")
+        # import mod_inventory
+        # mod_inventory.show(supabase)
+        st.info("📦 倉儲模組建置中... (請先確認 Admin 設定)")
 
     elif choice == "finance":
         import mod_project_dashboard
         mod_project_dashboard.show(supabase)
+
+    elif choice == "admin":  # <--- [NEW] Admin 模組路由
+        import mod_admin
+        mod_admin.show(supabase)
 
     else:
         st.warning(f"🚧 {choice_label} 模組建置中...")
