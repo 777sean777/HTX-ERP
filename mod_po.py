@@ -148,12 +148,24 @@ def show(supabase):
             st.caption("請輸入數量與單價，金額會自動計算。")
             
             editor_key = f"po_items_{target_po}"
+            
+            # 1. 嘗試同步
             if editor_key in st.session_state:
                 form_data["items"] = st.session_state[editor_key]
 
+            # ★★★ 2. 強制轉型 (關鍵修復)：不管現在是什麼，通通轉成 DataFrame ★★★
+            if not isinstance(form_data["items"], pd.DataFrame):
+                try:
+                    form_data["items"] = pd.DataFrame(form_data["items"])
+                except:
+                    # 萬一真的轉不過來，初始化一個空的
+                    form_data["items"] = pd.DataFrame([{"品項": "", "規格": "", "數量": 1, "單價": 0, "金額": 0}])
+
+            # 3. 補欄位
             if "金額" not in form_data["items"].columns:
                 form_data["items"]["金額"] = 0
 
+            # 4. 計算
             if not form_data["items"].empty:
                 form_data["items"]["數量"] = pd.to_numeric(form_data["items"]["數量"], errors='coerce').fillna(0)
                 form_data["items"]["單價"] = pd.to_numeric(form_data["items"]["單價"], errors='coerce').fillna(0)
@@ -204,6 +216,13 @@ def show(supabase):
             if cpm_key in st.session_state:
                 form_data["provided_materials"] = st.session_state[cpm_key]
 
+            # ★★★ 強制轉型 CPM 表格 ★★★
+            if not isinstance(form_data["provided_materials"], pd.DataFrame):
+                try:
+                    form_data["provided_materials"] = pd.DataFrame(form_data["provided_materials"])
+                except:
+                    form_data["provided_materials"] = pd.DataFrame([{"自備料品項": "", "規格": "", "預計提供數量": 0, "單位": "", "備註": ""}])
+
             edited_cpm = st.data_editor(
                 form_data["provided_materials"],
                 num_rows="dynamic",
@@ -220,7 +239,7 @@ def show(supabase):
             # D. 付款計畫
             st.markdown("#### 4. 付款計畫 (Payment Schedule)")
             df_pay = form_data["payments"].copy()
-            if not df_pay.empty and "預計付款日" in df_pay.columns:
+            if isinstance(df_pay, pd.DataFrame) and not df_pay.empty and "預計付款日" in df_pay.columns:
                 df_pay["預計付款日"] = pd.to_datetime(df_pay["預計付款日"]).dt.date
             
             edited_payments = st.data_editor(
@@ -228,7 +247,10 @@ def show(supabase):
                 column_config={"預計付款日": st.column_config.DateColumn(format="YYYY-MM-DD", required=True), "金額": st.column_config.NumberColumn(required=True)}
             )
             
-            pay_total = edited_payments["金額"].sum() if not edited_payments.empty else 0
+            pay_total = 0
+            if isinstance(edited_payments, pd.DataFrame) and not edited_payments.empty:
+                pay_total = edited_payments["金額"].sum() 
+            
             diff = final_total - pay_total
             
             # E. 檢核與存檔
