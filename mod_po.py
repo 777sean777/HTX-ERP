@@ -5,6 +5,12 @@ import io
 import os
 from datetime import datetime, date
 
+# 嘗試導入 fpdf，若無安裝則 Pass (避免紅字崩潰)
+try:
+    from fpdf import FPDF
+except ImportError:
+    FPDF = None
+
 # --- 憲法 3.x 變動費用科目 ---
 COST_ITEMS = [
     "3.1 原料採購成本", "3.1 輔料採購成本", "3.1 機械結構件採購", "3.1 電控零件採購", "3.1 耗材成本",
@@ -148,24 +154,16 @@ def show(supabase):
             st.caption("請輸入數量與單價，金額會自動計算。")
             
             editor_key = f"po_items_{target_po}"
-            
-            # 1. 嘗試同步
             if editor_key in st.session_state:
                 form_data["items"] = st.session_state[editor_key]
 
-            # ★★★ 2. 強制轉型 (關鍵修復)：不管現在是什麼，通通轉成 DataFrame ★★★
+            # 強制轉型防護罩
             if not isinstance(form_data["items"], pd.DataFrame):
-                try:
-                    form_data["items"] = pd.DataFrame(form_data["items"])
-                except:
-                    # 萬一真的轉不過來，初始化一個空的
-                    form_data["items"] = pd.DataFrame([{"品項": "", "規格": "", "數量": 1, "單價": 0, "金額": 0}])
+                try: form_data["items"] = pd.DataFrame(form_data["items"])
+                except: form_data["items"] = pd.DataFrame([{"品項": "", "規格": "", "數量": 1, "單價": 0, "金額": 0}])
 
-            # 3. 補欄位
-            if "金額" not in form_data["items"].columns:
-                form_data["items"]["金額"] = 0
+            if "金額" not in form_data["items"].columns: form_data["items"]["金額"] = 0
 
-            # 4. 計算
             if not form_data["items"].empty:
                 form_data["items"]["數量"] = pd.to_numeric(form_data["items"]["數量"], errors='coerce').fillna(0)
                 form_data["items"]["單價"] = pd.to_numeric(form_data["items"]["單價"], errors='coerce').fillna(0)
@@ -211,17 +209,13 @@ def show(supabase):
 
             # C. 自備料明細
             st.markdown("#### 3. 自備料清單 (Provided Materials)")
-            
             cpm_key = f"po_cpm_{target_po}"
             if cpm_key in st.session_state:
                 form_data["provided_materials"] = st.session_state[cpm_key]
 
-            # ★★★ 強制轉型 CPM 表格 ★★★
             if not isinstance(form_data["provided_materials"], pd.DataFrame):
-                try:
-                    form_data["provided_materials"] = pd.DataFrame(form_data["provided_materials"])
-                except:
-                    form_data["provided_materials"] = pd.DataFrame([{"自備料品項": "", "規格": "", "預計提供數量": 0, "單位": "", "備註": ""}])
+                try: form_data["provided_materials"] = pd.DataFrame(form_data["provided_materials"])
+                except: form_data["provided_materials"] = pd.DataFrame([{"自備料品項": "", "規格": "", "預計提供數量": 0, "單位": "", "備註": ""}])
 
             edited_cpm = st.data_editor(
                 form_data["provided_materials"],
@@ -275,7 +269,6 @@ def show(supabase):
                 else:
                     p_code = sel_proj.split(" | ")[0]
                     supp_id = supp_map[sel_supp]['id']
-                    
                     save_data = {
                         "po_no": po_no, "p_code": p_code, "supp_id": supp_id, "cost_item": cost_item,
                         "order_date": order_date, "tax_type": tax_type, "total": final_total,
@@ -290,38 +283,47 @@ def show(supabase):
     if target_po != "(建立新採購單)":
         st.subheader("🖨️ 單據輸出中心")
         
-        # 讀取完整資料 (含 Company Info)
         full_po_data = load_po_data_raw(supabase, target_po)
         
         if full_po_data:
-            c_po, c_dn = st.columns(2)
+            c_po, c_pdf = st.columns(2)
             
-            # 1. 下載正式 PO
+            # 1. 下載 Excel PO
             with c_po:
                 excel_po = generate_excel_po(full_po_data, my_company)
                 st.download_button(
-                    label=f"📄 下載正式採購單 (PO)",
+                    label=f"📥 下載 Excel PO (A4 版)",
                     data=excel_po,
                     file_name=f"{target_po}_PO.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
             
-            # 2. 下載自備料收貨單
-            has_cpm = len(full_po_data.get('provided_materials', [])) > 0
-            if has_cpm:
-                with c_dn:
-                    excel_dn = generate_excel_delivery_note(full_po_data, my_company)
+            # 2. 下載 PDF PO (需要字型檔)
+            with c_pdf:
+                if os.path.exists("font.ttf") and FPDF:
+                    pdf_data = generate_pdf_po(full_po_data, my_company)
                     st.download_button(
-                        label=f"📦 下載自備料收貨單 (Delivery Note)",
-                        data=excel_dn,
-                        file_name=f"{target_po}_DeliveryNote.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        label=f"📄 下載 PDF PO (正式版)",
+                        data=pdf_data,
+                        file_name=f"{target_po}_PO.pdf",
+                        mime="application/pdf",
                         use_container_width=True
                     )
-            else:
-                with c_dn:
-                    st.info("此單無自備料，無需列印收貨單。")
+                else:
+                    st.warning("⚠️ 無法生成 PDF：請確認已安裝 fpdf2 並上傳 font.ttf 字型檔")
+                    
+            # 3. Delivery Note (Excel)
+            has_cpm = len(full_po_data.get('provided_materials', [])) > 0
+            if has_cpm:
+                st.markdown("---")
+                excel_dn = generate_excel_delivery_note(full_po_data, my_company)
+                st.download_button(
+                    label=f"📦 下載 Excel 自備料收貨單",
+                    data=excel_dn,
+                    file_name=f"{target_po}_DeliveryNote.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
     else:
         render_po_list(supabase)
@@ -371,12 +373,8 @@ def load_po_data_raw(supabase, po_no):
         head = supabase.table("purchase_orders").select("*, partners(*), project_code").eq("po_number", po_no).single().execute().data
         head['items'] = supabase.table("po_items").select("*").eq("po_number", po_no).execute().data
         head['provided_materials'] = supabase.table("po_provided_materials").select("*").eq("po_number", po_no).execute().data
-        
-        if head.get('partners'):
-            head['supplier_name'] = head['partners']['name']
-        else:
-            head['supplier_name'] = "Unknown Vendor"
-            
+        if head.get('partners'): head['supplier_name'] = head['partners']['name']
+        else: head['supplier_name'] = "Unknown Vendor"
         return head
     except Exception as e: 
         st.error(f"匯出數據讀取失敗: {e}")
@@ -459,100 +457,204 @@ def render_po_list(supabase):
                         st.rerun()
     except: pass
 
-# --- Excel Generators ---
+# --- A4 Excel Generators ---
 def generate_excel_po(po_data, my_company):
     output = io.BytesIO()
     workbook = pd.ExcelWriter(output, engine='xlsxwriter')
     wb = workbook.book
-    pd.DataFrame().to_excel(workbook, sheet_name='PO', index=False)
-    ws = workbook.sheets['PO']
+    ws = workbook.add_worksheet('PO')
     
+    # === A4 Print Settings ===
+    ws.set_paper(9) # 9 = A4
+    ws.fit_to_pages(1, 0) # Fit width to 1 page
+    ws.center_horizontally()
+    ws.set_margins(left=0.5, right=0.5, top=0.5, bottom=0.5)
+
+    # Styles
     f_title = wb.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
+    f_sub = wb.add_format({'align': 'center', 'text_wrap': True})
     f_bold = wb.add_format({'bold': True, 'font_size': 10})
-    f_box = wb.add_format({'border': 1, 'text_wrap': True, 'valign': 'top', 'font_size': 10})
-    f_header = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1, 'align': 'center'})
-    f_num = wb.add_format({'border': 1, 'num_format': '#,##0'})
+    f_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    f_cell = wb.add_format({'border': 1, 'text_wrap': True, 'valign': 'top'})
+    f_num = wb.add_format({'border': 1, 'num_format': '#,##0', 'valign': 'top'})
     
     comp_name = my_company.get('company_name_zh', 'HTX')
     comp_addr = my_company.get('address', '')
     comp_tel = my_company.get('phone', '')
-    
-    # Logo Embedding
+
+    # Header
     if os.path.exists("logo.png"):
-        ws.insert_image('A1', 'logo.png', {'x_scale': 0.5, 'y_scale': 0.5})
+        ws.insert_image('A1', 'logo.png', {'x_scale': 0.6, 'y_scale': 0.6})
         ws.merge_range('C1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
     else:
         ws.merge_range('A1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
-
-    ws.merge_range('A2:F2', f"{comp_name}\n地址: {comp_addr}\n電話: {comp_tel}", wb.add_format({'align': 'center', 'text_wrap': True}))
     
-    ws.write('D4', "PO Number:", f_bold)
+    ws.merge_range('A2:F2', f"{comp_name}\n{comp_addr}\nTel: {comp_tel}", f_sub)
+    
+    # Info Grid
+    ws.write('D4', "PO NO:", f_bold)
     ws.write('E4', po_data['po_number'])
-    ws.write('D5', "Date:", f_bold)
+    ws.write('D5', "DATE:", f_bold)
     ws.write('E5', po_data['order_date'])
-    ws.write('D6', "Project:", f_bold)
+    ws.write('D6', "PROJECT:", f_bold)
     ws.write('E6', po_data['project_code'])
-    
+
     supp = po_data.get('partners') or {}
     ws.merge_range('A4:C4', "Vendor (供應商):", f_header)
-    ws.merge_range('A5:C8', f"{supp.get('name', po_data.get('supplier_name', ''))}\n{supp.get('company_address','')}\nAttn: {supp.get('contact_person','')}\nTel: {supp.get('company_phone','')}", f_box)
+    ws.merge_range('A5:C8', f"{supp.get('name','')}\n{supp.get('company_address','')}\nAttn: {supp.get('contact_person','')}\nTel: {supp.get('company_phone','')}", f_cell)
     
     ws.merge_range('A10:C10', "Ship To (送貨地址):", f_header)
-    ws.merge_range('A11:C13', f"{po_data.get('ship_to_address','')}\nAttn: {po_data.get('receiver_contact','')}", f_box)
+    ws.merge_range('A11:C13', f"{po_data.get('ship_to_address','')}\nAttn: {po_data.get('receiver_contact','')}", f_cell)
     
     ws.merge_range('D10:F10', "Terms (條款):", f_header)
-    ws.merge_range('D11:F13', f"Payment: {po_data.get('payment_terms','')}\nTrade: {po_data.get('trade_terms','')}\nTax: {po_data.get('tax_type','')}", f_box)
+    ws.merge_range('D11:F13', f"Pay: {po_data.get('payment_terms','')}\nTrade: {po_data.get('trade_terms','')}\nTax: {po_data.get('tax_type','')}", f_cell)
 
+    # Table
     row = 15
-    headers = ["Item", "Description (Spec)", "Qty", "Unit", "Unit Price", "Amount"]
+    ws.set_row(row, 20)
+    headers = ["Item Name", "Spec / Description", "Qty", "Unit", "Price", "Amount"]
     for col, h in enumerate(headers):
         ws.write(row, col, h, f_header)
     
     row += 1
     for item in po_data['items']:
-        ws.write(row, 0, item['product_name'], f_box)
-        ws.write(row, 1, item['spec'], f_box)
-        ws.write(row, 2, item['quantity'], f_box)
-        ws.write(row, 3, "pcs", f_box)
+        ws.write(row, 0, item['product_name'], f_cell)
+        ws.write(row, 1, item['spec'], f_cell)
+        ws.write(row, 2, item['quantity'], f_cell)
+        ws.write(row, 3, "pcs", f_cell)
         ws.write(row, 4, item['unit_price'], f_num)
         ws.write(row, 5, item['amount'], f_num)
         row += 1
-        
+    
     ws.write(row, 4, "Total:", f_bold)
     ws.write(row, 5, po_data['total_amount'], f_num)
-    
-    cpm = po_data.get('provided_materials', [])
-    if cpm:
-        row += 2
-        ws.merge_range(row, 0, row, 5, "附件：自備料清單 (Materials Provided by Buyer)", f_header)
-        row += 1
-        ws.write(row, 0, "Item Name", f_bold)
-        ws.write(row, 1, "Spec", f_bold)
-        ws.write(row, 2, "Qty", f_bold)
-        ws.write(row, 3, "Unit", f_bold)
-        ws.write(row, 4, "Remarks", f_bold)
-        row += 1
-        for m in cpm:
-            ws.write(row, 0, m['material_name'], f_box)
-            ws.write(row, 1, m['spec'], f_box)
-            ws.write(row, 2, m['quantity'], f_box)
-            ws.write(row, 3, m['unit'], f_box)
-            ws.write(row, 4, m['remarks'], f_box)
-            row += 1
 
+    # Signatures
     row += 4
     ws.merge_range(row, 0, row, 2, "Confirmed By (Supplier):", f_header)
     ws.merge_range(row, 3, row, 5, "Approved By (Buyer):", f_header)
-    ws.merge_range(row+1, 0, row+3, 2, "", f_box)
-    ws.merge_range(row+1, 3, row+3, 5, "", f_box)
+    ws.merge_range(row+1, 0, row+3, 2, "", f_cell)
+    ws.merge_range(row+1, 3, row+3, 5, "", f_cell)
 
     ws.set_column('A:A', 20)
-    ws.set_column('B:B', 25)
+    ws.set_column('B:B', 30)
     ws.set_column('C:E', 10)
     ws.set_column('F:F', 15)
     
     workbook.close()
     return output.getvalue()
+
+# --- PDF Generator (Requires fpdf2 + font.ttf) ---
+def generate_pdf_po(po_data, my_company):
+    class PDF(FPDF):
+        def header(self):
+            if os.path.exists("logo.png"):
+                self.image("logo.png", 10, 8, 33)
+            self.set_font('CustomFont', 'B', 20)
+            self.cell(0, 10, 'PURCHASE ORDER', 0, 1, 'C')
+            self.set_font('CustomFont', '', 10)
+            
+            c_name = my_company.get('company_name_zh', 'HTX')
+            c_addr = my_company.get('address', '')
+            c_tel = my_company.get('phone', '')
+            self.multi_cell(0, 5, f"{c_name}\n{c_addr}\nTel: {c_tel}", 0, 'C')
+            self.ln(5)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('CustomFont', '', 8)
+            self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+
+    pdf = PDF()
+    # Register Chinese Font (Must act if font.ttf exists)
+    if os.path.exists("font.ttf"):
+        pdf.add_font('CustomFont', '', 'font.ttf')
+        pdf.add_font('CustomFont', 'B', 'font.ttf') # Simulate Bold
+    else:
+        # Fallback to standard (No Chinese support)
+        pdf.add_font('CustomFont', '', 'Arial') 
+        
+    pdf.alias_nb_pages()
+    pdf.add_page()
+    pdf.set_font('CustomFont', '', 10)
+
+    # Info Block
+    pdf.set_fill_color(230, 230, 230)
+    
+    # Row 1: Vendor & PO Info
+    pdf.cell(95, 6, "Vendor (供應商):", 1, 0, 'L', True)
+    pdf.cell(95, 6, "PO Info:", 1, 1, 'L', True)
+    
+    supp = po_data.get('partners') or {}
+    vendor_txt = f"{supp.get('name','')}\n{supp.get('company_address','')}\nAttn: {supp.get('contact_person','')}\nTel: {supp.get('company_phone','')}"
+    
+    po_txt = f"PO NO: {po_data['po_number']}\nDate: {po_data['order_date']}\nProject: {po_data['project_code']}"
+    
+    # Save x,y
+    x_start = pdf.get_x()
+    y_start = pdf.get_y()
+    
+    pdf.multi_cell(95, 5, vendor_txt, 1)
+    y_end_1 = pdf.get_y()
+    
+    pdf.set_xy(x_start + 95, y_start)
+    pdf.multi_cell(95, 5, po_txt, 1)
+    y_end_2 = pdf.get_y()
+    
+    pdf.set_y(max(y_end_1, y_end_2))
+
+    # Row 2: Ship To & Terms
+    pdf.cell(95, 6, "Ship To (送貨地址):", 1, 0, 'L', True)
+    pdf.cell(95, 6, "Terms (條款):", 1, 1, 'L', True)
+    
+    ship_txt = f"{po_data.get('ship_to_address','')}\nAttn: {po_data.get('receiver_contact','')}"
+    term_txt = f"Payment: {po_data.get('payment_terms','')}\nTrade: {po_data.get('trade_terms','')}\nTax: {po_data.get('tax_type','')}"
+    
+    x_start = pdf.get_x()
+    y_start = pdf.get_y()
+    
+    pdf.multi_cell(95, 5, ship_txt, 1)
+    y_end_1 = pdf.get_y()
+    
+    pdf.set_xy(x_start + 95, y_start)
+    pdf.multi_cell(95, 5, term_txt, 1)
+    y_end_2 = pdf.get_y()
+    
+    pdf.set_y(max(y_end_1, y_end_2))
+    pdf.ln(5)
+
+    # Table Header
+    cols = [60, 50, 20, 20, 20, 20] # Widths
+    headers = ["Item Name", "Spec", "Qty", "Unit", "Price", "Amount"]
+    
+    pdf.set_font('CustomFont', 'B', 10)
+    for i, h in enumerate(headers):
+        pdf.cell(cols[i], 7, h, 1, 0, 'C', True)
+    pdf.ln()
+    
+    # Table Body
+    pdf.set_font('CustomFont', '', 9)
+    for item in po_data['items']:
+        pdf.cell(cols[0], 6, str(item['product_name']), 1)
+        pdf.cell(cols[1], 6, str(item['spec']), 1)
+        pdf.cell(cols[2], 6, str(item['quantity']), 1, 0, 'C')
+        pdf.cell(cols[3], 6, "pcs", 1, 0, 'C')
+        pdf.cell(cols[4], 6, f"{item['unit_price']:,}", 1, 0, 'R')
+        pdf.cell(cols[5], 6, f"{item['amount']:,}", 1, 1, 'R')
+        
+    # Total
+    pdf.cell(sum(cols)-20, 7, "Total Amount:", 1, 0, 'R')
+    pdf.cell(20, 7, f"{po_data['total_amount']:,}", 1, 1, 'R', True)
+    
+    pdf.ln(10)
+    
+    # Signatures
+    pdf.cell(95, 6, "Confirmed By (Supplier):", 1, 0, 'L', True)
+    pdf.cell(95, 6, "Approved By (Buyer):", 1, 1, 'L', True)
+    pdf.cell(95, 25, "", 1, 0) # Box
+    pdf.cell(95, 25, "", 1, 1) # Box
+
+    return pdf.output(dest='S').encode('latin-1')
 
 def generate_excel_delivery_note(po_data, my_company):
     output = io.BytesIO()
@@ -560,31 +662,29 @@ def generate_excel_delivery_note(po_data, my_company):
     wb = workbook.book
     pd.DataFrame().to_excel(workbook, sheet_name='DN', index=False)
     ws = workbook.sheets['DN']
+    ws.set_paper(9)
+    ws.fit_to_pages(1, 0)
     
     f_title = wb.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
     f_bold = wb.add_format({'bold': True, 'font_size': 12})
     f_box = wb.add_format({'border': 1, 'text_wrap': True})
-    f_header = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1})
     
-    # Logo for DN
     if os.path.exists("logo.png"):
         ws.insert_image('A1', 'logo.png', {'x_scale': 0.5, 'y_scale': 0.5})
-        ws.merge_range('C1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
+        ws.merge_range('C1:E1', "自備料交貨單 (DELIVERY NOTE)", f_title)
     else:
-        ws.merge_range('A1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
+        ws.merge_range('A1:E1', "自備料交貨單 (DELIVERY NOTE)", f_title)
 
-    ws.merge_range('A2:E2', f"Ref PO No.: {po_data['po_number']}", wb.add_format({'align': 'center', 'font_size': 14, 'bold': True}))
+    ws.merge_range('A2:E2', f"Ref PO: {po_data['po_number']}", wb.add_format({'align': 'center', 'bold': True}))
     
-    ws.write('A4', "To (Receiver):", f_bold)
+    ws.write('A4', "To:", f_bold)
     supp = po_data.get('partners') or {}
-    ws.merge_range('B4:E4', f"{supp.get('name', po_data.get('supplier_name', 'Unknown'))}", f_box)
-    ws.write('A5', "From (Sender):", f_bold)
-    ws.merge_range('B5:E5', my_company.get('company_name_zh', 'HTX'), f_box)
+    ws.merge_range('B4:E4', f"{supp.get('name','')}", f_box)
     
     row = 7
     headers = ["Item Name", "Spec", "Quantity", "Unit", "Remarks"]
     for col, h in enumerate(headers):
-        ws.write(row, col, h, f_header)
+        ws.write(row, col, h, wb.add_format({'bold': True, 'border': 1, 'bg_color': '#DDD'}))
     
     row += 1
     for m in po_data.get('provided_materials', []):
@@ -594,19 +694,6 @@ def generate_excel_delivery_note(po_data, my_company):
         ws.write(row, 3, m['unit'], f_box)
         ws.write(row, 4, m['remarks'], f_box)
         row += 1
-        
-    row += 3
-    ws.merge_range(row, 0, row, 4, "聲明：收到上述物料無誤，本批物料僅供指定 PO 訂單加工使用，加工完成後餘料需退回。", wb.add_format({'italic': True}))
     
-    row += 2
-    ws.write(row, 0, "Received By (Sign):", f_bold)
-    ws.merge_range(row, 1, row, 2, "", wb.add_format({'bottom': 1}))
-    ws.write(row, 3, "Date:", f_bold)
-    ws.write(row, 4, "", wb.add_format({'bottom': 1}))
-
-    ws.set_column('A:A', 20)
-    ws.set_column('B:B', 20)
-    ws.set_column('C:E', 15)
-
     workbook.close()
     return output.getvalue()
