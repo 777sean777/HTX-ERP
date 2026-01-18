@@ -549,9 +549,18 @@ def generate_pdf_po(po_data, my_company):
         def header(self):
             if os.path.exists("logo.png"):
                 self.image("logo.png", 10, 8, 33)
-            self.set_font('CustomFont', 'B', 20)
+            # Fallback for font if missing
+            try:
+                self.set_font('CustomFont', 'B', 20)
+            except:
+                self.set_font('Arial', 'B', 20)
+                
             self.cell(0, 10, 'PURCHASE ORDER', 0, 1, 'C')
-            self.set_font('CustomFont', '', 10)
+            
+            try:
+                self.set_font('CustomFont', '', 10)
+            except:
+                self.set_font('Arial', '', 10)
             
             c_name = my_company.get('company_name_zh', 'HTX')
             c_addr = my_company.get('address', '')
@@ -561,19 +570,33 @@ def generate_pdf_po(po_data, my_company):
 
         def footer(self):
             self.set_y(-15)
-            self.set_font('CustomFont', '', 8)
+            try:
+                self.set_font('CustomFont', '', 8)
+            except:
+                self.set_font('Arial', '', 8)
             self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
 
     pdf = PDF()
-    if os.path.exists("font.ttf"):
-        pdf.add_font('CustomFont', '', 'font.ttf')
-        pdf.add_font('CustomFont', 'B', 'font.ttf') 
-    else:
-        pdf.add_font('CustomFont', '', 'Arial') 
+    
+    # ⚠️ 字型載入防呆 (嚴格使用 fname 參數)
+    try:
+        if os.path.exists("font.ttf"):
+            pdf.add_font("CustomFont", style="", fname="font.ttf")
+            pdf.add_font("CustomFont", style="B", fname="font.ttf")
+        else:
+            # 如果沒有字型檔，不崩潰，只是會沒中文
+            pass
+    except Exception as e:
+        print(f"Font loading error: {e}")
         
     pdf.alias_nb_pages()
     pdf.add_page()
-    pdf.set_font('CustomFont', '', 10)
+    
+    # Set font safely
+    try:
+        pdf.set_font('CustomFont', '', 10)
+    except:
+        pdf.set_font('Arial', '', 10)
 
     pdf.set_fill_color(230, 230, 230)
     
@@ -610,12 +633,20 @@ def generate_pdf_po(po_data, my_company):
     cols = [60, 50, 20, 20, 20, 20]
     headers = ["Item Name", "Spec", "Qty", "Unit", "Price", "Amount"]
     
-    pdf.set_font('CustomFont', 'B', 10)
+    try:
+        pdf.set_font('CustomFont', 'B', 10)
+    except:
+        pdf.set_font('Arial', 'B', 10)
+        
     for i, h in enumerate(headers):
         pdf.cell(cols[i], 7, h, 1, 0, 'C', True)
     pdf.ln()
     
-    pdf.set_font('CustomFont', '', 9)
+    try:
+        pdf.set_font('CustomFont', '', 9)
+    except:
+        pdf.set_font('Arial', '', 9)
+        
     for item in po_data['items']:
         pdf.cell(cols[0], 6, str(item['product_name']), 1)
         pdf.cell(cols[1], 6, str(item['spec']), 1)
