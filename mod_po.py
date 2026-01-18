@@ -290,7 +290,7 @@ def show(supabase):
         if full_po_data:
             c_po, c_pdf = st.columns(2)
             
-            # 1. 下載 Excel PO (已修復 AttributeError)
+            # 1. 下載 Excel PO
             with c_po:
                 excel_po = generate_excel_po(full_po_data, my_company)
                 st.download_button(
@@ -462,21 +462,32 @@ def render_po_list(supabase):
 # --- Excel & PDF Generators ---
 def generate_excel_po(po_data, my_company):
     output = io.BytesIO()
-    # ⚠️ 修正：正確獲取 Workbook 物件的方法
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    workbook = writer.book # 這是 xlsxwriter.Workbook 物件
+    workbook = writer.book
     ws = workbook.add_worksheet('PO')
-    
-    # 註冊 Worksheet 給 writer (防止 Pandas 關閉時報錯)
     writer.sheets['PO'] = ws
     
-    ws.set_paper(9)
-    ws.fit_to_pages(1, 0)
+    # === A4 Print Settings ===
+    ws.set_paper(9) # A4
+    ws.fit_to_pages(1, 0) # Fit width to 1 page
     ws.center_horizontally()
     ws.set_margins(left=0.5, right=0.5, top=0.5, bottom=0.5)
 
-    f_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
-    f_sub = workbook.add_format({'align': 'center', 'text_wrap': True})
+    # === 關鍵修正：設定欄寬與列高 ===
+    ws.set_column('A:A', 25) # 供應商/地址欄加寬
+    ws.set_column('B:B', 35) # 規格欄加寬
+    ws.set_column('C:F', 12) # 其他欄位
+    
+    ws.set_row(0, 55) # Logo 列高
+    ws.set_row(1, 65) # 公司資訊列高 (確保三行顯示)
+    
+    # 設定地址區塊的固定列高 (防止截斷)
+    for r in range(4, 8): ws.set_row(r, 20) # Vendor Address
+    for r in range(10, 13): ws.set_row(r, 20) # Ship To & Terms
+
+    # Styles
+    f_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter'})
+    f_sub = workbook.add_format({'align': 'center', 'text_wrap': True, 'valign': 'top'})
     f_bold = workbook.add_format({'bold': True, 'font_size': 10})
     f_header = workbook.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
     f_cell = workbook.add_format({'border': 1, 'text_wrap': True, 'valign': 'top'})
@@ -486,14 +497,17 @@ def generate_excel_po(po_data, my_company):
     comp_addr = my_company.get('address', '')
     comp_tel = my_company.get('phone', '')
 
+    # Header & Logo
     if os.path.exists("logo.png"):
-        ws.insert_image('A1', 'logo.png', {'x_scale': 0.6, 'y_scale': 0.6})
+        # 不強制縮放，讓它適應列高
+        ws.insert_image('A1', 'logo.png', {'x_scale': 0.55, 'y_scale': 0.55, 'object_position': 1})
         ws.merge_range('C1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
     else:
         ws.merge_range('A1:F1', "採購訂單 (PURCHASE ORDER)", f_title)
     
     ws.merge_range('A2:F2', f"{comp_name}\n{comp_addr}\nTel: {comp_tel}", f_sub)
     
+    # Info Grid
     ws.write('D4', "PO NO:", f_bold)
     ws.write('E4', po_data['po_number'])
     ws.write('D5', "DATE:", f_bold)
@@ -511,8 +525,9 @@ def generate_excel_po(po_data, my_company):
     ws.merge_range('D10:F10', "Terms (條款):", f_header)
     ws.merge_range('D11:F13', f"Pay: {po_data.get('payment_terms','')}\nTrade: {po_data.get('trade_terms','')}\nTax: {po_data.get('tax_type','')}", f_cell)
 
+    # Table
     row = 15
-    ws.set_row(row, 20)
+    ws.set_row(row, 25) # 表頭列高
     headers = ["Item Name", "Spec / Description", "Qty", "Unit", "Price", "Amount"]
     for col, h in enumerate(headers):
         ws.write(row, col, h, f_header)
@@ -530,18 +545,14 @@ def generate_excel_po(po_data, my_company):
     ws.write(row, 4, "Total:", f_bold)
     ws.write(row, 5, po_data['total_amount'], f_num)
 
+    # Signatures
     row += 4
     ws.merge_range(row, 0, row, 2, "Confirmed By (Supplier):", f_header)
     ws.merge_range(row, 3, row, 5, "Approved By (Buyer):", f_header)
     ws.merge_range(row+1, 0, row+3, 2, "", f_cell)
     ws.merge_range(row+1, 3, row+3, 5, "", f_cell)
-
-    ws.set_column('A:A', 20)
-    ws.set_column('B:B', 30)
-    ws.set_column('C:E', 10)
-    ws.set_column('F:F', 15)
     
-    writer.close() # 關閉 writer
+    writer.close()
     return output.getvalue()
 
 def generate_pdf_po(po_data, my_company):
@@ -549,7 +560,6 @@ def generate_pdf_po(po_data, my_company):
         def header(self):
             if os.path.exists("logo.png"):
                 self.image("logo.png", 10, 8, 33)
-            # Fallback for font if missing
             try:
                 self.set_font('CustomFont', 'B', 20)
             except:
@@ -578,13 +588,11 @@ def generate_pdf_po(po_data, my_company):
 
     pdf = PDF()
     
-    # ⚠️ 字型載入防呆 (嚴格使用 fname 參數)
     try:
         if os.path.exists("font.ttf"):
             pdf.add_font("CustomFont", style="", fname="font.ttf")
             pdf.add_font("CustomFont", style="B", fname="font.ttf")
         else:
-            # 如果沒有字型檔，不崩潰，只是會沒中文
             pass
     except Exception as e:
         print(f"Font loading error: {e}")
@@ -592,7 +600,6 @@ def generate_pdf_po(po_data, my_company):
     pdf.alias_nb_pages()
     pdf.add_page()
     
-    # Set font safely
     try:
         pdf.set_font('CustomFont', '', 10)
     except:
@@ -673,29 +680,38 @@ def generate_excel_delivery_note(po_data, my_company):
     ws = workbook.add_worksheet('DN')
     writer.sheets['DN'] = ws
     
+    # === A4 & Layout Settings ===
     ws.set_paper(9)
     ws.fit_to_pages(1, 0)
-    
-    f_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center'})
-    f_bold = workbook.add_format({'bold': True, 'font_size': 12})
-    f_box = workbook.add_format({'border': 1, 'text_wrap': True})
-    f_header = workbook.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1})
+    ws.set_column('A:A', 25)
+    ws.set_column('B:B', 25)
+    ws.set_column('C:E', 15)
+    ws.set_row(0, 55) # Logo row height
+
+    f_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter'})
+    f_bold = workbook.add_format({'bold': True, 'font_size': 12, 'valign': 'top'})
+    f_box = workbook.add_format({'border': 1, 'text_wrap': True, 'valign': 'top'})
+    f_header = workbook.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
     
     if os.path.exists("logo.png"):
-        ws.insert_image('A1', 'logo.png', {'x_scale': 0.5, 'y_scale': 0.5})
+        ws.insert_image('A1', 'logo.png', {'x_scale': 0.55, 'y_scale': 0.55, 'object_position': 1})
         ws.merge_range('C1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
     else:
         ws.merge_range('A1:E1', "自備料交貨單 (MATERIAL DELIVERY NOTE)", f_title)
 
     ws.merge_range('A2:E2', f"Ref PO No.: {po_data['po_number']}", workbook.add_format({'align': 'center', 'font_size': 14, 'bold': True}))
     
+    ws.set_row(3, 30) # Address row height
     ws.write('A4', "To (Receiver):", f_bold)
     supp = po_data.get('partners') or {}
     ws.merge_range('B4:E4', f"{supp.get('name', po_data.get('supplier_name', 'Unknown'))}", f_box)
+    
+    ws.set_row(4, 30) # Address row height
     ws.write('A5', "From (Sender):", f_bold)
     ws.merge_range('B5:E5', my_company.get('company_name_zh', 'HTX'), f_box)
     
     row = 7
+    ws.set_row(row, 25)
     headers = ["Item Name", "Spec", "Quantity", "Unit", "Remarks"]
     for col, h in enumerate(headers):
         ws.write(row, col, h, f_header)
@@ -710,17 +726,13 @@ def generate_excel_delivery_note(po_data, my_company):
         row += 1
         
     row += 3
-    ws.merge_range(row, 0, row, 4, "聲明：收到上述物料無誤，本批物料僅供指定 PO 訂單加工使用，加工完成後餘料需退回。", workbook.add_format({'italic': True}))
+    ws.merge_range(row, 0, row, 4, "聲明：收到上述物料無誤，本批物料僅供指定 PO 訂單加工使用，加工完成後餘料需退回。", workbook.add_format({'italic': True, 'text_wrap': True}))
     
     row += 2
     ws.write(row, 0, "Received By (Sign):", f_bold)
     ws.merge_range(row, 1, row, 2, "", workbook.add_format({'bottom': 1}))
     ws.write(row, 3, "Date:", f_bold)
     ws.write(row, 4, "", workbook.add_format({'bottom': 1}))
-
-    ws.set_column('A:A', 20)
-    ws.set_column('B:B', 20)
-    ws.set_column('C:E', 15)
 
     writer.close()
     return output.getvalue()
